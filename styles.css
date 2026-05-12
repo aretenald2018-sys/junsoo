@@ -64,6 +64,62 @@ button:disabled {
   grid-template-columns: var(--sidebar) minmax(0, 1fr);
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: linear-gradient(135deg, #f7fbff 0%, #eef4f8 52%, #f7f8f4 100%);
+}
+
+.auth-panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 16px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.auth-card {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.auth-title {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.auth-sub,
+.auth-note {
+  color: var(--gray-600);
+}
+
+.auth-sub {
+  margin-top: 6px;
+}
+
+.auth-note {
+  font-size: 12px;
+}
+
+.auth-submit {
+  width: 100%;
+  justify-content: center;
+  min-height: 42px;
+}
+
 .sidebar {
   background: var(--white);
   border-right: 1px solid var(--gray-200);

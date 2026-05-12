@@ -2,9 +2,14 @@
   "use strict";
 
   const STORAGE_KEY = "renewd.clinic.v1";
+  const AUTH_SESSION_KEY = "renewd.auth.session.v1";
+  const AUTH_USER = "joonsoo";
+  const AUTH_SALT = "renewd-local-gate-v1";
+  const AUTH_HASH = "73172ab99dd1c2d57380bd78e77c85c113418e1dc64797fdb29f2902be6f1eb4";
   const DATE_LOCALE = "ko-KR";
 
   const state = {
+    authenticated: sessionStorage.getItem(AUTH_SESSION_KEY) === "ok",
     view: "dashboard",
     currentPatientId: null,
     detailTab: "overview",
@@ -23,9 +28,8 @@
     stats: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-2"/></svg>'
   };
 
-  const db = loadDb();
-  if (!state.currentPatientId && db.patients.length) state.currentPatientId = db.patients[0].id;
-  if (!state.reportPatientId && db.patients.length) state.reportPatientId = db.patients[0].id;
+  let db = state.authenticated ? loadDb() : null;
+  initActivePatient();
 
   render();
 
@@ -69,27 +73,33 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   }
 
+  function initActivePatient() {
+    if (!db) return;
+    if (!state.currentPatientId && db.patients.length) state.currentPatientId = db.patients[0].id;
+    if (!state.reportPatientId && db.patients.length) state.reportPatientId = db.patients[0].id;
+  }
+
   function seedDb() {
     const patients = [
       {
         id: "p_lee",
         chartNo: "C-2026-0118",
-        name: "이혜진",
-        phone: "010-1234-5678",
+        name: "샘플환자 A",
+        phone: "000-0000-0001",
         birth: "1992-03-14",
         gender: "여",
-        occupation: "마케터",
-        source: "인스타그램",
+        occupation: "사무직",
+        source: "샘플 유입",
         height: 163,
         startWeight: 71.4,
         targetWeight: 58,
         waist: 86,
         status: "active",
         primaryDoctor: "김원장",
-        notes: "갑상선 약 복용. 야간 식사 빈도 높음.",
+        notes: "샘플 메모. 야간 식사 빈도 높음.",
         allergies: "견과류",
-        medications: "싱지로이드 0.05mg",
-        conditions: "갑상선 기능저하증",
+        medications: "샘플 복용약",
+        conditions: "샘플 주의질환",
         pregnancy: "해당없음",
         consents: { privacy: true, sensitive: true, sms: true, report: true, photo: true, marketing: false },
         createdAt: "2026-01-18"
@@ -97,22 +107,22 @@
       {
         id: "p_jung",
         chartNo: "C-2026-0501",
-        name: "정수민",
-        phone: "010-2233-7788",
+        name: "샘플환자 B",
+        phone: "000-0000-0002",
         birth: "1997-08-22",
         gender: "여",
-        occupation: "디자이너",
-        source: "지인소개",
+        occupation: "프리랜서",
+        source: "샘플 소개",
         height: 166,
         startWeight: 67.2,
         targetWeight: 57,
         waist: 82,
         status: "active",
         primaryDoctor: "김원장",
-        notes: "생리불순. 최근 체중 정체.",
+        notes: "샘플 메모. 최근 체중 정체.",
         allergies: "",
         medications: "",
-        conditions: "생리불순",
+        conditions: "샘플 주의사항",
         pregnancy: "해당없음",
         consents: { privacy: true, sensitive: true, sms: true, report: true, photo: false, marketing: false },
         createdAt: "2026-05-01"
@@ -120,8 +130,8 @@
       {
         id: "p_choi",
         chartNo: "C-2026-0328",
-        name: "최유리",
-        phone: "010-7777-3210",
+        name: "샘플환자 C",
+        phone: "000-0000-0003",
         birth: "1984-11-02",
         gender: "여",
         occupation: "자영업",
@@ -328,6 +338,11 @@
   }
 
   function render() {
+    if (!state.authenticated) {
+      document.getElementById("app").innerHTML = renderLogin();
+      closeModal();
+      return;
+    }
     document.getElementById("app").innerHTML = `
       <div class="app">
         ${renderSidebar()}
@@ -336,6 +351,38 @@
           <section class="content">${renderView()}</section>
         </main>
       </div>
+    `;
+  }
+
+  function renderLogin() {
+    return `
+      <main class="auth-shell">
+        <section class="auth-panel">
+          <div class="auth-brand">
+            <div class="brand-mark">R</div>
+            <div>
+              <div class="brand-name">Renewd</div>
+              <div class="brand-sub">다이어트 한의원 운영 시스템</div>
+            </div>
+          </div>
+          <form class="auth-card" data-form="login" autocomplete="off">
+            <div>
+              <div class="auth-title">로그인</div>
+              <div class="auth-sub">승인된 계정으로만 진료 운영 화면에 접근할 수 있습니다.</div>
+            </div>
+            <div class="field">
+              <label>아이디</label>
+              <input class="input" name="loginId" autocomplete="username" autofocus />
+            </div>
+            <div class="field">
+              <label>비밀번호</label>
+              <input class="input" name="loginPassword" type="password" autocomplete="current-password" />
+            </div>
+            <button class="btn primary auth-submit" type="submit">접속</button>
+            <div class="auth-note">공용 PC에서는 브라우저를 닫기 전에 로그아웃하세요.</div>
+          </form>
+        </section>
+      </main>
     `;
   }
 
@@ -398,6 +445,7 @@
         <div class="topbar-actions">
           <button class="btn secondary" data-action="export-json">데이터 백업</button>
           <button class="btn secondary" data-action="import-json">복원</button>
+          <button class="btn secondary" data-action="logout">로그아웃</button>
           <button class="btn primary" data-action="new-patient">+ 환자</button>
           <input id="json-import-file" type="file" accept="application/json,.json" hidden />
         </div>
@@ -1117,6 +1165,12 @@
       case "import-json":
         document.getElementById("json-import-file")?.click();
         break;
+      case "logout":
+        sessionStorage.removeItem(AUTH_SESSION_KEY);
+        state.authenticated = false;
+        db = null;
+        render();
+        break;
       case "close-modal":
         closeModal();
         break;
@@ -1169,6 +1223,10 @@
     if (!form) return;
     event.preventDefault();
     const type = form.dataset.form;
+    if (type === "login") {
+      await handleLoginForm(form);
+      return;
+    }
     if (type === "patient") savePatientForm(form);
     if (type === "visit") saveVisitForm(form);
     if (type === "body") saveBodyForm(form);
@@ -1177,6 +1235,30 @@
     if (type === "message") saveMessageForm(form);
     if (type === "appointment") saveAppointmentForm(form);
     if (type === "photo") await savePhotoForm(form);
+  }
+
+  async function handleLoginForm(form) {
+    const values = formValues(form);
+    const loginId = String(values.loginId || "").trim();
+    const password = String(values.loginPassword || "");
+    const hash = await sha256Hex(`${AUTH_SALT}:${loginId}:${password}`);
+    if (loginId !== AUTH_USER || hash !== AUTH_HASH) {
+      toast("아이디 또는 비밀번호가 맞지 않습니다.");
+      form.querySelector("[name='loginPassword']")?.focus();
+      return;
+    }
+    sessionStorage.setItem(AUTH_SESSION_KEY, "ok");
+    state.authenticated = true;
+    db = loadDb();
+    initActivePatient();
+    render();
+    toast("로그인했습니다.");
+  }
+
+  async function sha256Hex(text) {
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
   function openPatientModal(id) {
@@ -1465,8 +1547,8 @@
     if (!target) return;
     target.value = [
       "name,phone,measuredAt,weight,bodyFatRate,skeletalMuscle,bmi,visceralFatLevel,waist,bmr",
-      "이혜진,010-1234-5678,2026-05-12,63.7,29.8,22.5,24.0,8,76,1364",
-      "정수민,010-2233-7788,2026-05-16,66.8,33.1,21.9,24.2,9,81,1330"
+      "샘플환자 A,000-0000-0001,2026-05-12,63.7,29.8,22.5,24.0,8,76,1364",
+      "샘플환자 B,000-0000-0002,2026-05-16,66.8,33.1,21.9,24.2,9,81,1330"
     ].join("\n");
     previewCsvImport();
   }
