@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { buildExportBlockBundle, flattenBundle } from "./lib/exportblock-parser.mjs";
 import { getAdminFirestore, writeDocuments } from "./lib/firestore-admin.mjs";
+import { writeDocumentsViaRest } from "./lib/firestore-rest.mjs";
 
 const DEFAULT_SOURCE = "C:\\Users\\USER\\Documents\\ExportBlock-55f789b2-74b8-426c-9cd0-264ee03f0d4e-Part-1";
 
@@ -32,12 +33,14 @@ async function main() {
     throw new Error("실제 Firestore 쓰기는 --yes 플래그가 필요합니다. 먼저 --dry-run으로 검증하세요.");
   }
 
-  const db = await getAdminFirestore({
-    projectId: args.project,
-    databaseId,
-    serviceAccount: args["service-account"]
-  });
-  const written = await writeDocuments(db, { rootCollection, instanceId }, docs);
+  const useAdmin = Boolean(args["service-account"] || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  const written = useAdmin
+    ? await writeDocuments(await getAdminFirestore({
+        projectId: args.project || "exercise-management",
+        databaseId,
+        serviceAccount: args["service-account"]
+      }), { rootCollection, instanceId }, docs)
+    : await writeDocumentsViaRest({ projectId: args.project || "exercise-management", databaseId, rootCollection, instanceId }, docs);
   printSafeSummary({ written, importBatchId: bundle.importBatchId });
 }
 

@@ -49,11 +49,17 @@ export async function buildExportBlockBundle(sourceDir, options = {}) {
   const sourceRecords = [];
   const careTasks = [];
   const patientAliases = new Map();
+  const patients = new Map();
+  const appointments = new Map();
   const dataQualityIssues = [];
 
   for (const row of csvRows) {
     const rowTitle = String(row.data["이름"] || "").trim();
     const normalizedTitle = normalizeTitle(rowTitle);
+    const patientName = derivePatientName(rowTitle);
+    const aliasKey = normalizeTitle(patientName || rowTitle);
+    const aliasId = aliasKey ? `alias_${hashText(aliasKey).slice(0, 24)}` : "";
+    const patientId = aliasKey ? `imp_patient_${hashText(aliasKey).slice(0, 24)}` : null;
     const matchedMarkdown = normalizedTitle ? markdownByTitle.get(normalizedTitle) || [] : [];
     const sourceRecordId = `src_csv_${row.hash.slice(0, 24)}`;
     const sourceRecord = {
@@ -88,8 +94,8 @@ export async function buildExportBlockBundle(sourceDir, options = {}) {
       instanceId,
       importBatchId,
       sourceRecordId,
-      patientId: null,
-      patientMatchStatus: rowTitle ? "needs_review" : "unmatched",
+      patientId,
+      patientMatchStatus: patientId ? "imported_alias" : "unmatched",
       title: rowTitle || "(untitled task)",
       summary: valueOrNull(row.data["명료화"]),
       memo: valueOrNull(row.data["메모"]),
@@ -112,17 +118,17 @@ export async function buildExportBlockBundle(sourceDir, options = {}) {
     };
     careTasks.push(task);
 
-    if (rowTitle) {
-      const aliasId = `alias_${hashText(normalizedTitle || rowTitle).slice(0, 24)}`;
+    if (patientId) {
       const current = patientAliases.get(aliasId) || {
         id: aliasId,
         schemaVersion: 1,
         instanceId,
         importBatchId,
         rawLabel: rowTitle,
-        normalizedKey: normalizedTitle,
-        patientId: null,
-        matchStatus: "needs_review",
+        displayName: patientName,
+        normalizedKey: aliasKey,
+        patientId,
+        matchStatus: "imported",
         sourceRecordIds: [],
         taskIds: [],
         createdAt: now,
@@ -132,6 +138,44 @@ export async function buildExportBlockBundle(sourceDir, options = {}) {
       current.taskIds.push(taskId);
       current.updatedAt = now;
       patientAliases.set(aliasId, current);
+
+      const currentPatient = patients.get(patientId) || {
+        id: patientId,
+        schemaVersion: 1,
+        instanceId,
+        importBatchId,
+        chartNo: `IMP-${hashText(aliasKey).slice(0, 8).toUpperCase()}`,
+        name: patientName || rowTitle,
+        phone: "",
+        birth: "",
+        gender: "",
+        occupation: "",
+        source: "ExportBlock",
+        height: "",
+        startWeight: "",
+        targetWeight: "",
+        waist: "",
+        status: status === "done" ? "followup" : "active",
+        primaryDoctor: "김원장",
+        notes: "ExportBlock에서 생성된 환자 후보입니다. 환자 상세에서 병합/정제가 필요합니다.",
+        allergies: "",
+        medications: "",
+        conditions: "",
+        pregnancy: "",
+        consents: { privacy: true, sensitive: true, sms: true, report: true, photo: false, marketing: false },
+        createdAt: dueDate || now.slice(0, 10),
+        updatedAt: now,
+        importedTaskIds: []
+      };
+      currentPatient.importedTaskIds.push(taskId);
+      if (status !== "done") currentPatient.status = "active";
+      currentPatient.updatedAt = now;
+      patients.set(patientId, currentPatient);
+    }
+
+    const appointment = buildAppointmentFromTask(task, textForClassify, now);
+    if (appointment) {
+      appointments.set(appointment.id, appointment);
     }
 
     for (const flag of task.dataQualityFlags) {
@@ -184,7 +228,9 @@ export async function buildExportBlockBundle(sourceDir, options = {}) {
       rawCsvRows,
       canonicalCsvRows: csvRows.length,
       duplicateCsvRowsCollapsed: Math.max(0, rawCsvRows - csvRows.length),
+      patients: patients.size,
       careTasks: careTasks.length,
+      appointments: appointments.size,
       sourceRecords: sourceRecords.length,
       patientAliases: patientAliases.size,
       dataQualityIssues: dataQualityIssues.length
@@ -199,8 +245,10 @@ export async function buildExportBlockBundle(sourceDir, options = {}) {
     summary: importDoc.counts,
     collections: {
       imports: [importDoc],
+      patients: Array.from(patients.values()),
       sourceRecords,
       careTasks,
+      appointments: Array.from(appointments.values()),
       patientAliases: Array.from(patientAliases.values()),
       dataQualityIssues
     }
@@ -401,6 +449,51 @@ function inferOutcome(text) {
   if (/보냄|완료|연락함|응대중/.test(text)) return "contacted";
   if (/환불/.test(text)) return "refund_requested";
   return "unknown";
+}
+
+function derivePatientName(label) {
+  let text = String(label || "").trim();
+  if (!text) return "";
+  text = text
+    .replace(/^\s*(?:오전|오후)?\s*\d{1,2}\s*(?::|\s)?\s*\d{0,2}\s*(?:시|분|경|쯤|이전|이후|넘어서|반)?\s*/g, "")
+    .replace(/^\s*\d{1,2}\s*~\s*\d{1,2}\s*시?\s*/g, "")
+    .replace(/\s*(?:연락(?:하기|드리기|한번 드려보기)?|전화(?:하기|드리기)?|문자(?:보내기|보냄|연락)?|카톡(?:안내|연락)?|해피콜|경과|확인(?:연락)?|예약.*|내원.*|해독(?:문자|완료|시작)?|본약.*|처방(?:함)?|재처방.*|환불.*|문제.*)\s*$/g, "")
+    .replace(/[()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || String(label || "").trim();
+}
+
+function buildAppointmentFromTask(task, text, now) {
+  if (!task.patientId || !task.dueDate) return null;
+  if (!/예약|내원|\d{1,2}\s*(?:시|:)/.test(text || task.title || "")) return null;
+  const time = extractTime(text || task.title) || "09:00";
+  return {
+    id: `appt_import_${task.id.slice(5)}`,
+    schemaVersion: 1,
+    instanceId: task.instanceId,
+    importBatchId: task.importBatchId,
+    sourceTaskId: task.id,
+    patientId: task.patientId,
+    date: task.dueDate,
+    time,
+    type: task.category === "appointment" ? "내원/예약 후보" : "연락 예정",
+    status: task.status === "done" ? "completed" : "tentative",
+    memo: task.title,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function extractTime(text) {
+  const value = String(text || "");
+  let match = value.match(/(\d{1,2})\s*:\s*(\d{2})/);
+  if (match) return `${match[1].padStart(2, "0")}:${match[2]}`;
+  match = value.match(/(\d{1,2})\s*시\s*(반|[0-5]?\d\s*분?)?/);
+  if (!match) return "";
+  const hour = match[1].padStart(2, "0");
+  const min = match[2]?.includes("반") ? "30" : (match[2]?.match(/\d+/)?.[0] || "00").padStart(2, "0");
+  return `${hour}:${min}`;
 }
 
 function firstKeyword(pairs, text) {

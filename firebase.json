@@ -1,0 +1,9 @@
+{
+  "firestore": [
+    {
+      "database": "renewd-clinic",
+      "rules": "firestore.renewd-clinic.rules",
+      "indexes": "firestore.renewd-clinic.indexes.json"
+    }
+  ]
+}

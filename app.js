@@ -3,13 +3,32 @@
 
   const STORAGE_KEY = "renewd.clinic.v1";
   const AUTH_SESSION_KEY = "renewd.auth.session.v1";
-  const AUTH_USER = "joonsoo";
-  const AUTH_SALT = "renewd-local-gate-v1";
-  const AUTH_HASH = "73172ab99dd1c2d57380bd78e77c85c113418e1dc64797fdb29f2902be6f1eb4";
+  const RENEWD_LOAD_ENDPOINT = "https://asia-northeast3-exercise-management.cloudfunctions.net/renewdLoadClinicData";
+  const RENEWD_SAVE_ENDPOINT = "https://asia-northeast3-exercise-management.cloudfunctions.net/renewdSaveClinicData";
+  const REMOTE_MUTABLE_COLLECTIONS = [
+    "patients",
+    "visits",
+    "bodyCompositions",
+    "reports",
+    "payments",
+    "photos",
+    "appointments",
+    "messages",
+    "careTasks"
+  ];
+  const REMOTE_COLLECTIONS = [
+    ...REMOTE_MUTABLE_COLLECTIONS,
+    "sourceRecords",
+    "patientAliases",
+    "dataQualityIssues",
+    "imports"
+  ];
   const DATE_LOCALE = "ko-KR";
 
   const state = {
-    authenticated: sessionStorage.getItem(AUTH_SESSION_KEY) === "ok",
+    authenticated: Boolean(sessionStorage.getItem(AUTH_SESSION_KEY)),
+    remoteLoading: false,
+    remoteError: "",
     view: "dashboard",
     currentPatientId: null,
     detailTab: "overview",
@@ -28,10 +47,13 @@
     stats: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-2"/></svg>'
   };
 
-  let db = state.authenticated ? loadDb() : null;
-  initActivePatient();
+  let db = null;
+  let remoteSyncTimer = null;
+  let remoteSyncInFlight = false;
+  let remoteSyncQueued = false;
 
   render();
+  if (state.authenticated) bootAuthenticatedSession();
 
   document.addEventListener("click", handleClick);
   document.addEventListener("submit", handleSubmit);
@@ -53,8 +75,8 @@
     return seeded;
   }
 
-  function normalizeDb(value) {
-    const seeded = seedDb();
+  function normalizeDb(value, fallback) {
+    const seeded = fallback || seedDb();
     return {
       ...seeded,
       ...value,
@@ -65,12 +87,42 @@
       payments: Array.isArray(value.payments) ? value.payments : seeded.payments,
       photos: Array.isArray(value.photos) ? value.photos : seeded.photos,
       appointments: Array.isArray(value.appointments) ? value.appointments : seeded.appointments,
-      messages: Array.isArray(value.messages) ? value.messages : seeded.messages
+      messages: Array.isArray(value.messages) ? value.messages : seeded.messages,
+      careTasks: Array.isArray(value.careTasks) ? value.careTasks : [],
+      sourceRecords: Array.isArray(value.sourceRecords) ? value.sourceRecords : [],
+      patientAliases: Array.isArray(value.patientAliases) ? value.patientAliases : [],
+      dataQualityIssues: Array.isArray(value.dataQualityIssues) ? value.dataQualityIssues : [],
+      imports: Array.isArray(value.imports) ? value.imports : []
     };
   }
 
-  function saveDb() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  function emptyDb() {
+    const seeded = seedDb();
+    return {
+      ...seeded,
+      patients: [],
+      visits: [],
+      bodyCompositions: [],
+      reports: [],
+      payments: [],
+      photos: [],
+      appointments: [],
+      messages: [],
+      careTasks: [],
+      sourceRecords: [],
+      patientAliases: [],
+      dataQualityIssues: [],
+      imports: []
+    };
+  }
+
+  function saveDb(options = {}) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    } catch (error) {
+      console.warn(error);
+    }
+    if (options.remote !== false) queueRemoteSync();
   }
 
   function initActivePatient() {
@@ -343,6 +395,16 @@
       closeModal();
       return;
     }
+    if (state.remoteError) {
+      document.getElementById("app").innerHTML = renderRemoteError();
+      closeModal();
+      return;
+    }
+    if (state.remoteLoading || !db) {
+      document.getElementById("app").innerHTML = renderLoading();
+      closeModal();
+      return;
+    }
     document.getElementById("app").innerHTML = `
       <div class="app">
         ${renderSidebar()}
@@ -351,6 +413,48 @@
           <section class="content">${renderView()}</section>
         </main>
       </div>
+    `;
+  }
+
+  function renderLoading() {
+    return `
+      <main class="auth-shell">
+        <section class="auth-panel">
+          <div class="auth-brand">
+            <div class="brand-mark">R</div>
+            <div>
+              <div class="brand-name">Renewd</div>
+              <div class="brand-sub">Firestore 데이터 로딩</div>
+            </div>
+          </div>
+          <div class="auth-card">
+            <div class="auth-title">데이터를 불러오는 중</div>
+            <div class="auth-sub">renewd-clinic Firestore에서 환자, 케어업무, 예약 정보를 읽고 있습니다.</div>
+          </div>
+        </section>
+      </main>
+    `;
+  }
+
+  function renderRemoteError() {
+    return `
+      <main class="auth-shell">
+        <section class="auth-panel">
+          <div class="auth-brand">
+            <div class="brand-mark">R</div>
+            <div>
+              <div class="brand-name">Renewd</div>
+              <div class="brand-sub">Firestore 연결 오류</div>
+            </div>
+          </div>
+          <div class="auth-card">
+            <div class="auth-title">데이터를 불러오지 못했습니다</div>
+            <div class="callout warning">${esc(state.remoteError)}</div>
+            <button class="btn primary auth-submit" data-action="reload-firestore">다시 불러오기</button>
+            <button class="btn secondary auth-submit" data-action="logout">로그아웃</button>
+          </div>
+        </section>
+      </main>
     `;
   }
 
@@ -474,7 +578,7 @@
       <div class="page-head">
         <div>
           <div class="page-title">안녕하세요, 김원장님</div>
-          <div class="page-sub">GitHub Pages에서도 동작하도록 모든 데이터는 이 브라우저에 저장됩니다.</div>
+          <div class="page-sub">GitHub Pages 화면에서 로그인하면 Firestore 운영 DB를 불러옵니다.</div>
         </div>
         <div class="spacer"></div>
         <button class="btn secondary" data-action="new-visit">방문기록</button>
@@ -588,6 +692,7 @@
       ["overview", "개요"],
       ["visits", "방문 이력"],
       ["body", "체성분"],
+      ["careTasks", "케어 업무"],
       ["reports", "리포트"],
       ["photos", "사진"],
       ["prescriptions", "처방·시술"],
@@ -627,6 +732,7 @@
     switch (state.detailTab) {
       case "visits": return renderVisitTab(patient);
       case "body": return renderBodyTab(patient);
+      case "careTasks": return renderCareTaskTab(patient);
       case "reports": return renderReportTab(patient);
       case "photos": return renderPhotoTab(patient);
       case "prescriptions": return renderPrescriptionTab(patient);
@@ -753,6 +859,30 @@
               </tr>`).join("")}</tbody>
             </table>
           </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCareTaskTab(patient) {
+    const tasks = careTasksFor(patient.id).slice().sort((a, b) => String(b.dueDate || "").localeCompare(String(a.dueDate || "")));
+    return `
+      <div class="page-head compact">
+        <div><div class="page-title" style="font-size:18px">케어 업무</div><div class="page-sub">ExportBlock에서 가져온 연락, 경과확인, 처방 후 팔로업 업무입니다.</div></div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>예정일</th><th>상태</th><th>분류</th><th>채널</th><th>제목</th><th>메모</th></tr></thead>
+            <tbody>${tasks.map((task) => `<tr>
+              <td>${formatDate(task.dueDate)}</td>
+              <td>${statusBadge(task.status)}</td>
+              <td>${badge(careTaskCategoryLabel(task.category), careTaskBadge(task))}</td>
+              <td>${esc(careTaskChannelLabel(task.channel))}</td>
+              <td>${esc(task.title || "-")}</td>
+              <td>${esc(task.summary || task.memo || "-")}</td>
+            </tr>`).join("") || `<tr><td colspan="6">${empty("가져온 케어 업무가 없습니다.")}</td></tr>`}</tbody>
+          </table>
         </div>
       </div>
     `;
@@ -1000,7 +1130,7 @@
       <div class="page-head">
         <div>
           <div class="page-title">예약 캘린더</div>
-          <div class="page-sub">정적 앱에서도 예약은 저장·수정·삭제됩니다.</div>
+          <div class="page-sub">Firestore 운영 DB 기준으로 예약을 저장·수정·삭제합니다.</div>
         </div>
         <div class="spacer"></div>
         <button class="btn primary" data-action="new-appointment">+ 예약</button>
@@ -1036,7 +1166,7 @@
       <div class="page-head">
         <div>
           <div class="page-title">통계</div>
-          <div class="page-sub">현재 브라우저에 저장된 데이터 기준입니다.</div>
+          <div class="page-sub">Firestore 운영 DB에 저장된 데이터 기준입니다.</div>
         </div>
       </div>
       <div class="grid cols-4" style="margin-bottom:16px">
@@ -1165,9 +1295,14 @@
       case "import-json":
         document.getElementById("json-import-file")?.click();
         break;
+      case "reload-firestore":
+        bootAuthenticatedSession();
+        break;
       case "logout":
         sessionStorage.removeItem(AUTH_SESSION_KEY);
         state.authenticated = false;
+        state.remoteError = "";
+        state.remoteLoading = false;
         db = null;
         render();
         break;
@@ -1241,24 +1376,172 @@
     const values = formValues(form);
     const loginId = String(values.loginId || "").trim();
     const password = String(values.loginPassword || "");
-    const hash = await sha256Hex(`${AUTH_SALT}:${loginId}:${password}`);
-    if (loginId !== AUTH_USER || hash !== AUTH_HASH) {
-      toast("아이디 또는 비밀번호가 맞지 않습니다.");
-      form.querySelector("[name='loginPassword']")?.focus();
+    if (!loginId || !password) {
+      toast("아이디와 비밀번호를 입력해 주세요.");
       return;
     }
-    sessionStorage.setItem(AUTH_SESSION_KEY, "ok");
-    state.authenticated = true;
-    db = loadDb();
-    initActivePatient();
-    render();
-    toast("로그인했습니다.");
+    await bootAuthenticatedSession({ loginId, password });
   }
 
-  async function sha256Hex(text) {
-    const bytes = new TextEncoder().encode(text);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  async function bootAuthenticatedSession(credentials = null) {
+    if (!credentials && !getSessionToken()) {
+      state.authenticated = false;
+      state.remoteLoading = false;
+      render();
+      return;
+    }
+    state.authenticated = true;
+    state.remoteLoading = true;
+    state.remoteError = "";
+    render();
+    try {
+      const loaded = await loadFirestoreDb(credentials);
+      db = loaded.db;
+      if (loaded.sessionToken) setSessionToken(loaded.sessionToken);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+      } catch (error) {
+        console.warn(error);
+      }
+      initActivePatient();
+      state.remoteLoading = false;
+      render();
+      if (credentials) toast(`Firestore에서 환자 ${db.patients.length}명을 불러왔습니다.`);
+    } catch (error) {
+      console.error(error);
+      if (error?.status === 401) {
+        sessionStorage.removeItem(AUTH_SESSION_KEY);
+        state.authenticated = false;
+        state.remoteLoading = false;
+        state.remoteError = "";
+        db = null;
+        render();
+        toast("아이디 또는 비밀번호가 맞지 않거나 세션이 만료되었습니다.");
+        return;
+      }
+      db = null;
+      state.remoteLoading = false;
+      state.remoteError = error?.message || "알 수 없는 Firestore 연결 오류";
+      render();
+    }
+  }
+
+  async function loadFirestoreDb(credentials = null) {
+    const payload = credentials || { sessionToken: getSessionToken() };
+    const response = await postJson(RENEWD_LOAD_ENDPOINT, payload);
+    const loaded = response.collections || {};
+    REMOTE_COLLECTIONS.forEach((name) => {
+      if (!Array.isArray(loaded[name])) loaded[name] = [];
+    });
+    const normalized = normalizeDb(loaded, emptyDb());
+    if (!normalized.patients.length && normalized.patientAliases.length) {
+      normalized.patients = normalized.patientAliases.map((alias) => ({
+        id: alias.patientId || alias.id,
+        chartNo: `IMP-${String(alias.id || "").slice(-8).toUpperCase()}`,
+        name: alias.displayName || alias.rawLabel || "가져온 환자",
+        phone: "",
+        birth: "",
+        gender: "",
+        occupation: "",
+        source: "ExportBlock",
+        height: "",
+        startWeight: "",
+        targetWeight: "",
+        waist: "",
+        status: "active",
+        primaryDoctor: "김원장",
+        notes: "ExportBlock alias에서 생성된 환자 후보입니다.",
+        allergies: "",
+        medications: "",
+        conditions: "",
+        pregnancy: "",
+        consents: { privacy: true, sensitive: true, sms: true, report: true, photo: false, marketing: false },
+        createdAt: todayISO()
+      }));
+    }
+    return { db: normalized, sessionToken: response.sessionToken || payload.sessionToken || "" };
+  }
+
+  async function postJson(url, payload) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {})
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data?.message || data?.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      error.code = data?.error || "";
+      throw error;
+    }
+    return data;
+  }
+
+  function getSessionToken() {
+    return sessionStorage.getItem(AUTH_SESSION_KEY) || "";
+  }
+
+  function setSessionToken(token) {
+    if (token) sessionStorage.setItem(AUTH_SESSION_KEY, token);
+  }
+
+  function queueRemoteSync() {
+    if (!state.authenticated || !getSessionToken() || !db) return;
+    remoteSyncQueued = true;
+    window.clearTimeout(remoteSyncTimer);
+    remoteSyncTimer = window.setTimeout(flushRemoteSync, 500);
+  }
+
+  async function flushRemoteSync() {
+    if (remoteSyncInFlight) {
+      remoteSyncQueued = true;
+      return;
+    }
+    remoteSyncInFlight = true;
+    remoteSyncQueued = false;
+    try {
+      await saveFirestoreDb();
+    } catch (error) {
+      console.error(error);
+      if (error?.status === 401) {
+        sessionStorage.removeItem(AUTH_SESSION_KEY);
+        state.authenticated = false;
+        state.remoteError = "";
+        db = null;
+        render();
+        toast("세션이 만료되어 Firestore 저장을 중단했습니다.");
+      } else {
+        toast("Firestore 저장에 실패했습니다. 네트워크를 확인해 주세요.");
+      }
+    } finally {
+      remoteSyncInFlight = false;
+      if (remoteSyncQueued) queueRemoteSync();
+    }
+  }
+
+  async function saveFirestoreDb() {
+    const sessionToken = getSessionToken();
+    if (!sessionToken || !db) return;
+    const collections = {};
+    REMOTE_MUTABLE_COLLECTIONS.forEach((name) => {
+      collections[name] = JSON.parse(JSON.stringify(db[name] || []));
+    });
+    const response = await postJson(RENEWD_SAVE_ENDPOINT, { sessionToken, collections });
+    if (response.sessionToken) setSessionToken(response.sessionToken);
+  }
+
+  function fromFirestoreDoc(id, data) {
+    return { id: data?.id || id, ...decodeFirestoreValue(data) };
+  }
+
+  function decodeFirestoreValue(value) {
+    if (!value || typeof value !== "object") return value;
+    if (typeof value.toDate === "function") return value.toDate().toISOString();
+    if (Array.isArray(value)) return value.map(decodeFirestoreValue);
+    const out = {};
+    Object.entries(value).forEach(([key, item]) => out[key] = decodeFirestoreValue(item));
+    return out;
   }
 
   function openPatientModal(id) {
@@ -1843,6 +2126,16 @@
     const today = todayISO();
     const patients = onlyPatientId ? db.patients.filter((p) => p.id === onlyPatientId) : db.patients;
     const out = [];
+    db.careTasks
+      .filter((task) => !onlyPatientId || task.patientId === onlyPatientId)
+      .filter((task) => task.status !== "done")
+      .forEach((task) => {
+        if (!task.patientId || !getPatient(task.patientId)) return;
+        const dueGap = task.dueDate ? daysBetween(today, task.dueDate) : null;
+        const dueText = task.dueDate ? (dueGap < 0 ? `${Math.abs(dueGap)}일 지남` : dueGap === 0 ? "오늘 예정" : `D-${dueGap}`) : "날짜 미정";
+        const reason = [dueText, task.summary || task.memo || task.title].filter(Boolean).join(" · ");
+        out.push(queueItem(task.patientId, careTaskCategoryLabel(task.category), reason, careTaskBadge(task), "new-message", careTaskActionLabel(task), task.id));
+      });
     patients.forEach((p) => {
       const last = latestVisit(p.id);
       if (last) {
@@ -1860,11 +2153,15 @@
       }
       if (needsReport(p.id)) out.push(queueItem(p.id, "리포트", "체성분/방문 기록 업데이트 후 리포트 미발행", "blue", "new-report", "리포트"));
     });
-    return out;
+    return out.sort((a, b) => {
+      const taskA = a.taskId ? db.careTasks.find((task) => task.id === a.taskId) : null;
+      const taskB = b.taskId ? db.careTasks.find((task) => task.id === b.taskId) : null;
+      return String(taskA?.dueDate || "9999-12-31").localeCompare(String(taskB?.dueDate || "9999-12-31"));
+    });
   }
 
-  function queueItem(patientId, type, reason, badgeColor, action, actionLabel) {
-    return { patientId, type, reason, badge: badgeColor, action, actionLabel };
+  function queueItem(patientId, type, reason, badgeColor, action, actionLabel, taskId = "") {
+    return { patientId, type, reason, badge: badgeColor, action, actionLabel, taskId };
   }
 
   function renderQueueRow(q) {
@@ -1888,7 +2185,7 @@
   function getNavCounts() {
     return {
       dashboard: buildCareQueue().length,
-      reports: db.patients.filter((p) => needsReport(p.id)).length,
+      reports: Math.max(db.patients.filter((p) => needsReport(p.id)).length, db.careTasks.filter((task) => task.category === "progress_check" || task.phase !== "unknown").length),
       retention: buildCareQueue().filter((q) => q.type !== "리포트").length,
       calendar: db.appointments.filter((a) => a.date === todayISO()).length
     };
@@ -2080,7 +2377,39 @@
   function paymentsFor(patientId) { return db.payments.filter((p) => p.patientId === patientId); }
   function photosFor(patientId) { return db.photos.filter((p) => p.patientId === patientId); }
   function messagesFor(patientId) { return db.messages.filter((m) => m.patientId === patientId); }
+  function careTasksFor(patientId) { return db.careTasks.filter((task) => task.patientId === patientId); }
   function latestVisit(patientId) { return visitsFor(patientId).slice(-1)[0]; }
+
+  function careTaskCategoryLabel(value) {
+    return ({
+      refund: "환불",
+      issue: "주의",
+      missed_call: "부재중",
+      happy_call: "해피콜",
+      progress_check: "경과확인",
+      prescription: "처방",
+      appointment: "예약/내원",
+      contact: "연락",
+      general_followup: "팔로업"
+    })[value] || "팔로업";
+  }
+
+  function careTaskChannelLabel(value) {
+    return ({ sms: "문자", kakao: "카카오", phone: "전화", unknown: "미정" })[value] || "미정";
+  }
+
+  function careTaskBadge(task) {
+    if (task.priority === "high" || task.category === "refund" || task.category === "issue") return "red";
+    if (task.category === "appointment" || task.category === "prescription") return "amber";
+    if (task.category === "progress_check" || task.category === "happy_call") return "blue";
+    return "green";
+  }
+
+  function careTaskActionLabel(task) {
+    if (task.channel === "phone") return "전화기록";
+    if (task.channel === "kakao") return "카카오기록";
+    return "문자기록";
+  }
   function latestDateForPatient(patientId) { return latestVisit(patientId)?.date || getPatient(patientId)?.createdAt || ""; }
   function nextVisitDate(patientId) { return latestVisit(patientId)?.nextVisitDate || ""; }
 
