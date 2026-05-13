@@ -504,9 +504,8 @@
     const counts = getNavCounts();
     const navs = [
       ["dashboard", "대시보드", counts.dashboard],
-      ["patients", "환자 목록", db.patients.length],
-      ["reports", "리포트 발행", counts.reports],
       ["retention", "리텐션 관리", counts.retention],
+      ["reports", "리포트 발행", counts.reports],
       ["calendar", "예약 캘린더", counts.calendar],
       ["stats", "통계", ""]
     ];
@@ -522,7 +521,7 @@
         <div class="nav-group">
           <div class="nav-label">메인</div>
           ${navs.map(([view, label, count]) => `
-            <button class="nav-item ${state.view === view ? "active" : ""}" data-action="set-view" data-view="${view}">
+            <button class="nav-item ${state.view === view || (state.view === "patients" && view === "retention") ? "active" : ""}" data-action="set-view" data-view="${view}">
               ${icons[view]} <span>${label}</span>${count !== "" ? `<span class="nav-count">${count}</span>` : ""}
             </button>
           `).join("")}
@@ -543,10 +542,10 @@
   function renderTopbar() {
     const meta = {
       dashboard: ["대시보드", "오늘의 진료, 리포트, 재방문 큐"],
-      patients: ["환자 목록", "환자 정보를 검색하고 CRUD합니다"],
+      patients: ["리텐션 관리", "환자 목록과 예정 액션을 함께 관리합니다"],
       detail: [currentPatient()?.name || "환자 상세", "방문, 체성분, 리포트, 결제, 사진, 메시지 관리"],
       reports: ["리포트 발행", "체성분과 진료 기록 기반 환자용 리포트"],
-      retention: ["리텐션 관리", "다음 방문, 처방 종료, 장기 미방문 관리"],
+      retention: ["리텐션 관리", "환자 목록, 예정 액션, 장기 미방문 관리"],
       calendar: ["예약 캘린더", "예약 CRUD와 노쇼/완료 관리"],
       stats: ["통계", "로컬 데이터 기반 운영 지표"]
     }[state.view] || ["Renewd", ""];
@@ -569,7 +568,7 @@
 
   function renderView() {
     switch (state.view) {
-      case "patients": return renderPatients();
+      case "patients": return renderRetention();
       case "detail": return renderPatientDetail();
       case "reports": return renderReports();
       case "retention": return renderRetention();
@@ -685,7 +684,7 @@
     `;
   }
 
-  function renderPatients() {
+  function renderPatientDirectoryCard() {
     const filtered = db.patients
       .filter((p) => state.patientFilter === "all" || p.status === state.patientFilter)
       .filter((p) => {
@@ -694,17 +693,12 @@
       })
       .sort((a, b) => compareValues(patientSortValue(a, state.patientSortKey), patientSortValue(b, state.patientSortKey), state.patientSortDir));
     return `
-      <div class="page-head">
-        <div>
-          <div class="page-title">환자 목록</div>
-          <div class="page-sub">환자 정보를 생성, 수정, 삭제하고 상세 탭에서 관련 데이터를 관리합니다.</div>
-        </div>
-        <div class="spacer"></div>
-        <button class="btn secondary" data-action="open-import-body">체성분 CSV</button>
-        <button class="btn primary" data-action="new-patient">+ 새 환자</button>
-      </div>
       <div class="card">
         <div class="card-head toolbar">
+          <div>
+            <div class="card-title">전체 환자</div>
+            <div class="card-sub">환자 이름을 클릭하면 바로 상세로 이동합니다.</div>
+          </div>
           <input class="input" style="max-width:320px" placeholder="이름, 전화번호, 차트번호 검색" value="${esc(state.patientSearch)}" data-action="patient-search" />
           <select class="select" style="max-width:180px" data-action="patient-filter">
             ${option("all", "전체", state.patientFilter)}
@@ -733,7 +727,7 @@
                 const lastVisit = latestVisit(p.id);
                 const next = nextVisitDate(p.id);
                 return `<tr class="clickable" data-action="open-patient" data-id="${p.id}">
-                  <td>${patientLabel(p)}</td>
+                  <td>${patientOpenButton(p)}</td>
                   <td>${statusBadge(p.status)}</td>
                   <td>${lastVisit ? formatDate(lastVisit.date) : "-"}</td>
                   <td>${next ? formatDate(next) : "-"}</td>
@@ -752,6 +746,10 @@
     `;
   }
 
+  function renderPatients() {
+    return renderRetention();
+  }
+
   function renderPatientDetail() {
     const patient = currentPatient();
     if (!patient) return emptyPage("환자를 찾을 수 없습니다.");
@@ -768,7 +766,7 @@
     ];
     return `
       <div class="page-head">
-        <button class="btn ghost" data-action="set-view" data-view="patients">← 환자 목록</button>
+        <button class="btn ghost" data-action="set-view" data-view="retention">← 리텐션 관리</button>
         <div class="spacer"></div>
         <button class="btn secondary" data-action="edit-patient" data-id="${patient.id}">환자 수정</button>
         <button class="btn secondary" data-action="new-message" data-patient-id="${patient.id}">문자 기록</button>
@@ -1181,13 +1179,17 @@
       <div class="page-head">
         <div>
           <div class="page-title">리텐션 관리</div>
-          <div class="page-sub">예정 액션, 처방 종료, 다음 방문일, 장기 미방문을 기준으로 표시합니다.</div>
+          <div class="page-sub">전체 환자 목록과 예정 액션을 한 화면에서 관리합니다.</div>
         </div>
         <div class="spacer"></div>
+        <button class="btn secondary" data-action="open-import-body">체성분 CSV</button>
         <button class="btn secondary" data-action="new-action-template">액션 템플릿</button>
         <button class="btn primary" data-action="new-care-task">+ 예정 액션</button>
+        <button class="btn primary" data-action="new-patient">+ 새 환자</button>
       </div>
+      ${renderPatientDirectoryCard()}
       <div class="card">
+        <div class="card-head"><div class="card-title">리텐션 큐</div><div class="card-sub">환자 이름을 클릭하면 상세가 열립니다.</div></div>
         <div class="table-wrap">
           <table>
             <thead><tr>
@@ -1201,7 +1203,7 @@
             <tbody>${queue.map((q) => {
               const p = getPatient(q.patientId);
               return `<tr>
-                <td>${patientLabel(p)}</td>
+                <td>${patientOpenButton(p)}</td>
                 <td>${badge(q.type, q.badge)}</td>
                 <td>${formatDate(q.dueDate)}</td>
                 <td>${q.taskId ? renderDoneCheckbox(q.taskId, q.status === "done") : "-"}</td>
@@ -2996,6 +2998,11 @@
   function patientLabel(patient) {
     if (!patient) return "-";
     return `<div class="row"><div class="avatar small">${esc(patient.name[0] || "?")}</div><div><div class="strong">${esc(patient.name)}</div><div class="muted" style="font-size:12px">${esc(patient.phone)} · ${esc(patient.chartNo)}</div></div></div>`;
+  }
+
+  function patientOpenButton(patient) {
+    if (!patient) return "-";
+    return `<button class="patient-link" data-action="open-patient" data-id="${esc(patient.id)}">${patientLabel(patient)}</button>`;
   }
 
   function renderAppointmentLine(a) {
