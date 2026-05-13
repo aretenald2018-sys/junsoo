@@ -521,6 +521,15 @@ th {
   background: var(--gray-50);
 }
 
+.sort-btn {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-weight: 800;
+  text-align: left;
+}
+
 tr:last-child td {
   border-bottom: 0;
 }
@@ -826,6 +835,59 @@ tbody tr.clickable:hover {
   margin-top: 5px;
   text-align: left;
   font-size: 12px;
+}
+
+.cal-task {
+  margin-top: 5px;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  background: var(--white);
+  padding: 6px 7px;
+}
+
+.cal-task.done {
+  background: var(--gray-50);
+  color: var(--gray-600);
+}
+
+.cal-task-title {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.done-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gray-700);
+}
+
+.template-check {
+  min-height: 64px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.template-check small {
+  display: block;
+  margin-top: 3px;
+  color: var(--gray-600);
 }
 
 .modal-scrim {

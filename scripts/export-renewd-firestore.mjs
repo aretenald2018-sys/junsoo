@@ -8,6 +8,7 @@ const COLLECTIONS = [
   "patients",
   "patientAliases",
   "careTasks",
+  "actionTemplates",
   "contactAttempts",
   "visits",
   "bodyCompositions",

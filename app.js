@@ -14,7 +14,8 @@
     "photos",
     "appointments",
     "messages",
-    "careTasks"
+    "careTasks",
+    "actionTemplates"
   ];
   const REMOTE_COLLECTIONS = [
     ...REMOTE_MUTABLE_COLLECTIONS,
@@ -32,11 +33,18 @@
     view: "dashboard",
     currentPatientId: null,
     detailTab: "overview",
+    calendarMonth: "",
     patientSearch: "",
     patientFilter: "all",
+    patientSortKey: "latestVisit",
+    patientSortDir: "desc",
+    retentionSortKey: "dueDate",
+    retentionSortDir: "asc",
     reportPatientId: null,
     csvPreviewRows: []
   };
+
+  state.calendarMonth = todayISO().slice(0, 7);
 
   const icons = {
     dashboard: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12 12 4l9 8"/><path d="M5 10v10h14V10"/></svg>',
@@ -89,6 +97,7 @@
       appointments: Array.isArray(value.appointments) ? value.appointments : seeded.appointments,
       messages: Array.isArray(value.messages) ? value.messages : seeded.messages,
       careTasks: Array.isArray(value.careTasks) ? value.careTasks : [],
+      actionTemplates: Array.isArray(value.actionTemplates) && value.actionTemplates.length ? value.actionTemplates : defaultActionTemplates(),
       sourceRecords: Array.isArray(value.sourceRecords) ? value.sourceRecords : [],
       patientAliases: Array.isArray(value.patientAliases) ? value.patientAliases : [],
       dataQualityIssues: Array.isArray(value.dataQualityIssues) ? value.dataQualityIssues : [],
@@ -109,6 +118,7 @@
       appointments: [],
       messages: [],
       careTasks: [],
+      actionTemplates: defaultActionTemplates(),
       sourceRecords: [],
       patientAliases: [],
       dataQualityIssues: [],
@@ -569,6 +579,55 @@
     }
   }
 
+  function defaultActionTemplates() {
+    return [
+      {
+        id: "tpl_happy_call_7d",
+        name: "1주 뒤 해피콜",
+        category: "happy_call",
+        channel: "phone",
+        offsetDays: 7,
+        defaultTime: "10:00",
+        description: "신규 등록 후 복약/식이 적응 확인",
+        active: true,
+        createdAt: "2026-05-13"
+      },
+      {
+        id: "tpl_progress_42d",
+        name: "6주 뒤 경과 확인",
+        category: "progress_check",
+        channel: "sms",
+        offsetDays: 42,
+        defaultTime: "10:00",
+        description: "초기 감량 추이와 재방문 필요 여부 확인",
+        active: true,
+        createdAt: "2026-05-13"
+      },
+      {
+        id: "tpl_progress_70d",
+        name: "10주 뒤 경과 확인",
+        category: "progress_check",
+        channel: "sms",
+        offsetDays: 70,
+        defaultTime: "10:00",
+        description: "중기 정체기/처방 연장 여부 확인",
+        active: true,
+        createdAt: "2026-05-13"
+      },
+      {
+        id: "tpl_prescription_end",
+        name: "처방 종료 안내",
+        category: "prescription",
+        channel: "sms",
+        offsetDays: 21,
+        defaultTime: "10:00",
+        description: "처방 종료 전후 복약 반응 확인",
+        active: true,
+        createdAt: "2026-05-13"
+      }
+    ];
+  }
+
   function renderDashboard() {
     const queue = buildCareQueue();
     const todayAppointments = db.appointments.filter((a) => a.date === todayISO()).sort(byDateTime);
@@ -633,7 +692,7 @@
         const text = `${p.name} ${p.phone} ${p.chartNo} ${p.notes}`.toLowerCase();
         return text.includes(state.patientSearch.toLowerCase());
       })
-      .sort((a, b) => latestDateForPatient(b.id).localeCompare(latestDateForPatient(a.id)));
+      .sort((a, b) => compareValues(patientSortValue(a, state.patientSortKey), patientSortValue(b, state.patientSortKey), state.patientSortDir));
     return `
       <div class="page-head">
         <div>
@@ -659,7 +718,15 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>환자</th><th>상태</th><th>최근 방문</th><th>다음 방문</th><th>체중 변화</th><th>리포트</th><th>액션</th></tr></thead>
+            <thead><tr>
+              ${sortHeader("patients", "name", "환자")}
+              ${sortHeader("patients", "status", "상태")}
+              ${sortHeader("patients", "latestVisit", "최근 방문")}
+              ${sortHeader("patients", "nextVisit", "다음 방문")}
+              ${sortHeader("patients", "deltaWeight", "체중 변화")}
+              ${sortHeader("patients", "report", "리포트")}
+              <th>액션</th>
+            </tr></thead>
             <tbody>
               ${filtered.map((p) => {
                 const metrics = patientMetrics(p.id);
@@ -802,13 +869,24 @@
 
   function renderVisitTab(patient) {
     const visits = visitsFor(patient.id).slice().reverse();
+    const progressRows = patientProgressRows(patient.id);
     return `
       <div class="page-head">
-        <div><div class="page-title" style="font-size:18px">방문 이력</div><div class="page-sub">SOAP, 처방, 시술, 다음 방문일을 CRUD합니다.</div></div>
+        <div><div class="page-title" style="font-size:18px">방문 이력</div><div class="page-sub">방문, 액션, 문자, 예약 경과를 날짜순으로 확인합니다.</div></div>
         <div class="spacer"></div>
+        <button class="btn secondary" data-action="new-care-task" data-patient-id="${patient.id}">+ 액션</button>
         <button class="btn primary" data-action="new-visit" data-patient-id="${patient.id}">+ 방문기록</button>
       </div>
-      <div class="card"><div class="card-body">${visits.map(renderVisitItem).join("") || empty("방문기록이 없습니다.")}</div></div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">환자상태기록</div><div class="card-sub">완료 토글은 캘린더와 리텐션에도 즉시 반영됩니다.</div></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>완료</th><th>이름</th><th>분류</th><th>날짜</th><th>상태</th><th>메모</th><th>액션</th></tr></thead>
+            <tbody>${progressRows.map(renderProgressRow).join("") || `<tr><td colspan="7">${empty("표시할 경과 기록이 없습니다.")}</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card"><div class="card-head"><div class="card-title">SOAP 방문기록</div></div><div class="card-body">${visits.map(renderVisitItem).join("") || empty("방문기록이 없습니다.")}</div></div>
     `;
   }
 
@@ -868,20 +946,24 @@
     const tasks = careTasksFor(patient.id).slice().sort((a, b) => String(b.dueDate || "").localeCompare(String(a.dueDate || "")));
     return `
       <div class="page-head compact">
-        <div><div class="page-title" style="font-size:18px">케어 업무</div><div class="page-sub">ExportBlock에서 가져온 연락, 경과확인, 처방 후 팔로업 업무입니다.</div></div>
+        <div><div class="page-title" style="font-size:18px">케어 업무</div><div class="page-sub">등록 후 n일 뒤 수행할 액션과 ExportBlock에서 가져온 연락 업무입니다.</div></div>
+        <div class="spacer"></div>
+        <button class="btn primary" data-action="new-care-task" data-patient-id="${patient.id}">+ 액션</button>
       </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>예정일</th><th>상태</th><th>분류</th><th>채널</th><th>제목</th><th>메모</th></tr></thead>
+            <thead><tr><th>DONE</th><th>예정일</th><th>상태</th><th>분류</th><th>채널</th><th>액션명</th><th>메모</th><th>관리</th></tr></thead>
             <tbody>${tasks.map((task) => `<tr>
+              <td>${renderDoneCheckbox(task.id, task.status === "done")}</td>
               <td>${formatDate(task.dueDate)}</td>
               <td>${statusBadge(task.status)}</td>
               <td>${badge(careTaskCategoryLabel(task.category), careTaskBadge(task))}</td>
               <td>${esc(careTaskChannelLabel(task.channel))}</td>
-              <td>${esc(task.title || "-")}</td>
+              <td>${esc(task.actionName || task.title || "-")}</td>
               <td>${esc(task.summary || task.memo || "-")}</td>
-            </tr>`).join("") || `<tr><td colspan="6">${empty("가져온 케어 업무가 없습니다.")}</td></tr>`}</tbody>
+              <td><button class="btn small secondary" data-action="edit-care-task" data-id="${task.id}">수정</button><button class="btn small ghost" data-action="delete-care-task" data-id="${task.id}">삭제</button></td>
+            </tr>`).join("") || `<tr><td colspan="8">${empty("가져온 케어 업무가 없습니다.")}</td></tr>`}</tbody>
           </table>
         </div>
       </div>
@@ -1094,28 +1176,57 @@
   }
 
   function renderRetention() {
-    const queue = buildCareQueue();
+    const queue = buildCareQueue().sort((a, b) => compareValues(retentionSortValue(a, state.retentionSortKey), retentionSortValue(b, state.retentionSortKey), state.retentionSortDir));
     return `
       <div class="page-head">
         <div>
           <div class="page-title">리텐션 관리</div>
-          <div class="page-sub">처방 종료, 다음 방문일, 장기 미방문을 기준으로 표시합니다.</div>
+          <div class="page-sub">예정 액션, 처방 종료, 다음 방문일, 장기 미방문을 기준으로 표시합니다.</div>
         </div>
+        <div class="spacer"></div>
+        <button class="btn secondary" data-action="new-action-template">액션 템플릿</button>
+        <button class="btn primary" data-action="new-care-task">+ 예정 액션</button>
       </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>환자</th><th>분류</th><th>사유</th><th>마지막 방문</th><th>액션</th></tr></thead>
+            <thead><tr>
+              ${sortHeader("retention", "patient", "환자")}
+              ${sortHeader("retention", "type", "분류")}
+              ${sortHeader("retention", "dueDate", "예정일")}
+              ${sortHeader("retention", "status", "완료")}
+              ${sortHeader("retention", "lastVisit", "마지막 방문")}
+              <th>사유</th><th>액션</th>
+            </tr></thead>
             <tbody>${queue.map((q) => {
               const p = getPatient(q.patientId);
               return `<tr>
                 <td>${patientLabel(p)}</td>
                 <td>${badge(q.type, q.badge)}</td>
-                <td>${esc(q.reason)}</td>
+                <td>${formatDate(q.dueDate)}</td>
+                <td>${q.taskId ? renderDoneCheckbox(q.taskId, q.status === "done") : "-"}</td>
                 <td>${formatDate(latestVisit(q.patientId)?.date || "")}</td>
-                <td><button class="btn small secondary" data-action="open-patient" data-id="${q.patientId}">상세</button><button class="btn small tonal" data-action="new-message" data-patient-id="${q.patientId}">문자 기록</button></td>
+                <td>${esc(q.reason)}</td>
+                <td><button class="btn small secondary" data-action="open-patient" data-id="${q.patientId}">상세</button>${q.taskId ? `<button class="btn small tonal" data-action="edit-care-task" data-id="${q.taskId}">수정</button>` : `<button class="btn small tonal" data-action="${q.action}" data-patient-id="${q.patientId}">${q.actionLabel}</button>`}</td>
               </tr>`;
             }).join("")}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">액션 템플릿</div><div class="spacer"></div><button class="btn small secondary" data-action="new-action-template">+ 템플릿</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>이름</th><th>분류</th><th>채널</th><th>등록 후</th><th>기본시간</th><th>사용</th><th>액션</th></tr></thead>
+            <tbody>${db.actionTemplates.map((tpl) => `<tr>
+              <td><div class="strong">${esc(tpl.name)}</div><div class="muted" style="font-size:12px">${esc(tpl.description || "")}</div></td>
+              <td>${badge(careTaskCategoryLabel(tpl.category), "blue")}</td>
+              <td>${esc(careTaskChannelLabel(tpl.channel))}</td>
+              <td>${num(tpl.offsetDays)}일</td>
+              <td>${esc(tpl.defaultTime || "10:00")}</td>
+              <td>${tpl.active ? badge("사용", "green") : badge("중지", "")}</td>
+              <td><button class="btn small secondary" data-action="edit-action-template" data-id="${tpl.id}">수정</button><button class="btn small ghost" data-action="delete-action-template" data-id="${tpl.id}">삭제</button></td>
+            </tr>`).join("")}</tbody>
           </table>
         </div>
       </div>
@@ -1123,32 +1234,37 @@
   }
 
   function renderCalendar() {
-    const year = 2026;
-    const month = 5;
+    const [year, month] = state.calendarMonth.split("-").map(Number);
     const cells = calendarCells(year, month);
     return `
       <div class="page-head">
         <div>
           <div class="page-title">예약 캘린더</div>
-          <div class="page-sub">Firestore 운영 DB 기준으로 예약을 저장·수정·삭제합니다.</div>
+          <div class="page-sub">예약과 환자별 예정 액션을 같은 달력에서 관리합니다.</div>
         </div>
         <div class="spacer"></div>
+        <button class="btn secondary" data-action="calendar-prev">이전</button>
+        <button class="btn secondary" data-action="calendar-today">이번 달</button>
+        <button class="btn secondary" data-action="calendar-next">다음</button>
+        <button class="btn secondary" data-action="new-care-task">+ 액션</button>
         <button class="btn primary" data-action="new-appointment">+ 예약</button>
       </div>
       <div class="card">
-        <div class="card-head"><div class="card-title">2026년 5월</div></div>
+        <div class="card-head"><div class="card-title">${year}년 ${month}월</div></div>
         <div class="card-body">
           <div class="calendar-grid">
             ${["일", "월", "화", "수", "목", "금", "토"].map((d) => `<div class="cal-head">${d}</div>`).join("")}
             ${cells.map((cell) => {
               const date = `${year}-${String(month).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
               const appointments = db.appointments.filter((a) => a.date === date).sort(byDateTime);
+              const tasks = careTasksOn(date);
               return `<div class="cal-cell ${cell.off ? "off" : ""} ${date === todayISO() ? "today" : ""}">
                 <div class="cal-num">${cell.day}</div>
                 ${!cell.off ? appointments.map((a) => {
                   const p = getPatient(a.patientId);
                   return `<button class="cal-event" data-action="edit-appointment" data-id="${a.id}">${esc(a.time)} ${esc(p?.name || "환자")} · ${esc(a.type)}</button>`;
                 }).join("") : ""}
+                ${!cell.off ? tasks.map(renderCalendarTask).join("") : ""}
               </div>`;
             }).join("")}
           </div>
@@ -1193,6 +1309,9 @@
       case "set-view":
         state.view = el.dataset.view;
         render();
+        break;
+      case "sort-table":
+        setSort(el.dataset.scope, el.dataset.key);
         break;
       case "open-patient":
         state.currentPatientId = el.dataset.id;
@@ -1280,6 +1399,27 @@
       case "delete-message":
         deleteRecord("messages", el.dataset.id, "문자 기록을 삭제했습니다.");
         break;
+      case "new-care-task":
+        openCareTaskModal(null, el.dataset.patientId);
+        break;
+      case "edit-care-task":
+        openCareTaskModal(el.dataset.id);
+        break;
+      case "delete-care-task":
+        deleteRecord("careTasks", el.dataset.id, "예정 액션을 삭제했습니다.");
+        break;
+      case "toggle-care-task-done":
+        toggleCareTaskDone(el.dataset.id);
+        break;
+      case "new-action-template":
+        openActionTemplateModal();
+        break;
+      case "edit-action-template":
+        openActionTemplateModal(el.dataset.id);
+        break;
+      case "delete-action-template":
+        deleteActionTemplate(el.dataset.id);
+        break;
       case "new-appointment":
         openAppointmentModal();
         break;
@@ -1297,6 +1437,16 @@
         break;
       case "reload-firestore":
         bootAuthenticatedSession();
+        break;
+      case "calendar-prev":
+        shiftCalendarMonth(-1);
+        break;
+      case "calendar-next":
+        shiftCalendarMonth(1);
+        break;
+      case "calendar-today":
+        state.calendarMonth = todayISO().slice(0, 7);
+        render();
         break;
       case "logout":
         sessionStorage.removeItem(AUTH_SESSION_KEY);
@@ -1340,6 +1490,10 @@
       render();
       return;
     }
+    if (el.dataset.action === "care-template-select") {
+      applyTemplateToCareTaskForm(el.form, el.value);
+      return;
+    }
     if (el.id === "json-import-file") {
       importJsonFile(el.files?.[0]);
       return;
@@ -1369,6 +1523,8 @@
     if (type === "payment") savePaymentForm(form);
     if (type === "message") saveMessageForm(form);
     if (type === "appointment") saveAppointmentForm(form);
+    if (type === "careTask") saveCareTaskForm(form);
+    if (type === "actionTemplate") saveActionTemplateForm(form);
     if (type === "photo") await savePhotoForm(form);
   }
 
@@ -1602,6 +1758,12 @@
           ${checkField("사진 촬영 동의", "consentPhoto", p.consents.photo)}
           ${checkField("마케팅 수신 동의", "consentMarketing", p.consents.marketing)}
         </div>
+        ${patient ? "" : `
+          <div class="callout">신규 등록 후 자동으로 생성할 예정 액션을 선택하세요. 선택된 액션은 캘린더, 리텐션, 환자상태기록에 함께 표시됩니다.</div>
+          <div class="form-grid cols-3">
+            ${renderTemplateCheckboxes()}
+          </div>
+        `}
         ${modalActions(patient ? "저장" : "등록")}
       </form>
     `, { wide: true });
@@ -1640,7 +1802,9 @@
       },
       createdAt: getPatient(v.id)?.createdAt || todayISO()
     };
+    const isNew = !v.id;
     upsert(db.patients, data);
+    if (isNew) createInitialCareTasks(data, selectedTemplateIdsFromForm(v));
     state.currentPatientId = data.id;
     state.reportPatientId = data.id;
     state.view = "detail";
@@ -2063,6 +2227,117 @@
     toast("문자 기록을 저장했습니다.");
   }
 
+  function openCareTaskModal(id, patientId) {
+    const task = id ? db.careTasks.find((item) => item.id === id) : null;
+    const template = task?.actionTemplateId ? getActionTemplate(task.actionTemplateId) : activeActionTemplates()[0];
+    const patient = getPatient(task?.patientId || patientId || state.currentPatientId) || db.patients[0];
+    const dueDate = task?.dueDate || addDays(todayISO(), template?.offsetDays || 0);
+    const t = task || buildCareTaskFromTemplate(patient?.id || "", template, dueDate);
+    openModal(task ? "예정 액션 수정" : "예정 액션 등록", `
+      <form data-form="careTask" class="stack">
+        <input type="hidden" name="id" value="${esc(t.id)}" />
+        <div class="form-grid cols-3">
+          ${selectField("환자", "patientId", t.patientId, db.patients.map((p) => [p.id, `${p.name} · ${p.phone}`]))}
+          <div class="field"><label>액션 템플릿</label><select class="select" name="actionTemplateId" data-action="care-template-select">${db.actionTemplates.map((tpl) => option(tpl.id, `${tpl.name} · 등록 후 ${tpl.offsetDays || 0}일`, t.actionTemplateId)).join("")}</select></div>
+          ${field("등록 후 n일", "offsetDays", t.offsetDays ?? template?.offsetDays ?? 0, "number")}
+          ${field("예정일", "dueDate", t.dueDate || dueDate, "date", true)}
+          ${field("시간", "dueTime", t.dueTime || template?.defaultTime || "10:00", "time")}
+          ${selectField("상태", "status", t.status || "open", [["open", "대기"], ["done", "완료"], ["canceled", "취소"]])}
+          ${selectField("분류", "category", t.category || template?.category || "general_followup", actionCategoryOptions())}
+          ${selectField("채널", "channel", t.channel || template?.channel || "sms", actionChannelOptions())}
+          ${field("액션명", "actionName", t.actionName || t.title || template?.name || "", "text", true)}
+          ${textareaField("메모", "memo", t.memo || t.summary || "", "의사가 볼 내부 메모", "wide")}
+          ${textareaField("결과", "outcome", t.outcome || "", "완료 후 결과 기록", "wide")}
+        </div>
+        <div class="form-grid cols-3">
+          ${checkField("DONE", "done", (t.status || "") === "done")}
+        </div>
+        <div class="modal-foot" style="margin:0 -20px -20px">
+          ${task ? `<button class="btn danger" data-action="delete-care-task" data-id="${t.id}">삭제</button>` : ""}
+          <div class="spacer"></div>
+          <button type="button" class="btn ghost" data-action="close-modal">취소</button>
+          <button class="btn primary" type="submit">${task ? "저장" : "등록"}</button>
+        </div>
+      </form>
+    `, { wide: true, noFoot: true });
+  }
+
+  function saveCareTaskForm(form) {
+    const v = formValues(form);
+    if (!v.patientId || !v.dueDate || !v.actionName) return toast("환자, 예정일, 액션명은 필수입니다.");
+    const previous = db.careTasks.find((item) => item.id === v.id);
+    const status = v.done ? "done" : v.status;
+    const record = {
+      id: v.id || uid("task"),
+      patientId: v.patientId,
+      actionTemplateId: v.actionTemplateId,
+      actionName: v.actionName,
+      title: v.actionName,
+      category: v.category,
+      channel: v.channel,
+      dueDate: v.dueDate,
+      dueTime: v.dueTime,
+      offsetDays: toNumber(v.offsetDays) || 0,
+      status,
+      priority: previous?.priority || "normal",
+      memo: v.memo,
+      summary: v.memo,
+      outcome: v.outcome,
+      completedAt: status === "done" ? (previous?.completedAt || todayISO()) : "",
+      createdAt: previous?.createdAt || todayISO(),
+      schemaVersion: 2
+    };
+    upsert(db.careTasks, record);
+    state.currentPatientId = record.patientId;
+    state.detailTab = "careTasks";
+    closeModal();
+    saveDb();
+    render();
+    toast("예정 액션을 저장했습니다.");
+  }
+
+  function openActionTemplateModal(id) {
+    const template = id ? getActionTemplate(id) : null;
+    const t = template || { id: "", name: "", category: "happy_call", channel: "phone", offsetDays: 7, defaultTime: "10:00", description: "", active: true };
+    openModal(template ? "액션 템플릿 수정" : "액션 템플릿 등록", `
+      <form data-form="actionTemplate" class="stack">
+        <input type="hidden" name="id" value="${esc(t.id)}" />
+        <div class="form-grid cols-3">
+          ${field("이름", "name", t.name, "text", true)}
+          ${selectField("분류", "category", t.category, actionCategoryOptions())}
+          ${selectField("채널", "channel", t.channel, actionChannelOptions())}
+          ${field("등록 후 n일", "offsetDays", t.offsetDays, "number", true)}
+          ${field("기본시간", "defaultTime", t.defaultTime || "10:00", "time")}
+          ${checkField("사용", "active", t.active !== false)}
+          ${textareaField("설명", "description", t.description || "", "의사가 템플릿을 고를 때 볼 설명", "wide")}
+        </div>
+        ${modalActions(template ? "저장" : "등록")}
+      </form>
+    `, { wide: true });
+  }
+
+  function saveActionTemplateForm(form) {
+    const v = formValues(form);
+    if (!v.name || v.offsetDays === "") return toast("이름과 등록 후 n일은 필수입니다.");
+    const previous = getActionTemplate(v.id);
+    const record = {
+      id: v.id || uid("tpl"),
+      name: v.name,
+      category: v.category,
+      channel: v.channel,
+      offsetDays: toNumber(v.offsetDays) || 0,
+      defaultTime: v.defaultTime || "10:00",
+      description: v.description,
+      active: !!v.active,
+      createdAt: previous?.createdAt || todayISO()
+    };
+    upsert(db.actionTemplates, record);
+    closeModal();
+    saveDb();
+    render();
+    toast("액션 템플릿을 저장했습니다.");
+  }
+
   function openAppointmentModal(id) {
     const appt = id ? db.appointments.find((a) => a.id === id) : null;
     const a = appt || { id: "", patientId: state.currentPatientId || db.patients[0]?.id, date: todayISO(), time: "10:00", type: "재진", status: "reserved", memo: "" };
@@ -2128,13 +2403,13 @@
     const out = [];
     db.careTasks
       .filter((task) => !onlyPatientId || task.patientId === onlyPatientId)
-      .filter((task) => task.status !== "done")
+      .filter((task) => task.status !== "done" && task.status !== "canceled")
       .forEach((task) => {
         if (!task.patientId || !getPatient(task.patientId)) return;
         const dueGap = task.dueDate ? daysBetween(today, task.dueDate) : null;
         const dueText = task.dueDate ? (dueGap < 0 ? `${Math.abs(dueGap)}일 지남` : dueGap === 0 ? "오늘 예정" : `D-${dueGap}`) : "날짜 미정";
-        const reason = [dueText, task.summary || task.memo || task.title].filter(Boolean).join(" · ");
-        out.push(queueItem(task.patientId, careTaskCategoryLabel(task.category), reason, careTaskBadge(task), "new-message", careTaskActionLabel(task), task.id));
+        const reason = [dueText, task.summary || task.memo || task.actionName || task.title].filter(Boolean).join(" · ");
+        out.push(queueItem(task.patientId, careTaskCategoryLabel(task.category), reason, careTaskBadge(task), "edit-care-task", "수정", task.id, task.dueDate, task.status));
       });
     patients.forEach((p) => {
       const last = latestVisit(p.id);
@@ -2142,16 +2417,16 @@
         const lastGap = daysBetween(last.date, today);
         if (last.nextVisitDate) {
           const dueGap = daysBetween(today, last.nextVisitDate);
-          if (dueGap <= 3 && dueGap >= -10) out.push(queueItem(p.id, "다음 방문", dueGap < 0 ? `${Math.abs(dueGap)}일 지남` : `D-${dueGap}`, "amber", "new-message", "문자"));
+          if (dueGap <= 3 && dueGap >= -10) out.push(queueItem(p.id, "다음 방문", dueGap < 0 ? `${Math.abs(dueGap)}일 지남` : `D-${dueGap}`, "amber", "new-message", "문자", "", last.nextVisitDate, "open"));
         }
-        if (lastGap >= 30) out.push(queueItem(p.id, "이탈위험", `마지막 방문 ${lastGap}일 전`, lastGap >= 60 ? "red" : "amber", "new-message", "문자"));
+        if (lastGap >= 30) out.push(queueItem(p.id, "이탈위험", `마지막 방문 ${lastGap}일 전`, lastGap >= 60 ? "red" : "amber", "new-message", "문자", "", latestVisit(p.id)?.date || "", "open"));
         if (last.herbName && last.prescriptionDays) {
           const endDate = addDays(last.date, Number(last.prescriptionDays));
           const endGap = daysBetween(today, endDate);
-          if (endGap <= 3 && endGap >= -10) out.push(queueItem(p.id, "처방 종료", endGap < 0 ? `종료 ${Math.abs(endGap)}일 지남` : `종료 D-${endGap}`, "red", "new-message", "문자"));
+          if (endGap <= 3 && endGap >= -10) out.push(queueItem(p.id, "처방 종료", endGap < 0 ? `종료 ${Math.abs(endGap)}일 지남` : `종료 D-${endGap}`, "red", "new-message", "문자", "", endDate, "open"));
         }
       }
-      if (needsReport(p.id)) out.push(queueItem(p.id, "리포트", "체성분/방문 기록 업데이트 후 리포트 미발행", "blue", "new-report", "리포트"));
+      if (needsReport(p.id)) out.push(queueItem(p.id, "리포트", "체성분/방문 기록 업데이트 후 리포트 미발행", "blue", "new-report", "리포트", "", latestDateForPatient(p.id), "open"));
     });
     return out.sort((a, b) => {
       const taskA = a.taskId ? db.careTasks.find((task) => task.id === a.taskId) : null;
@@ -2160,17 +2435,18 @@
     });
   }
 
-  function queueItem(patientId, type, reason, badgeColor, action, actionLabel, taskId = "") {
-    return { patientId, type, reason, badge: badgeColor, action, actionLabel, taskId };
+  function queueItem(patientId, type, reason, badgeColor, action, actionLabel, taskId = "", dueDate = "", status = "open") {
+    return { patientId, type, reason, badge: badgeColor, action, actionLabel, taskId, dueDate, status };
   }
 
   function renderQueueRow(q) {
     const p = getPatient(q.patientId);
+    const actionAttrs = q.taskId ? `data-action="edit-care-task" data-id="${q.taskId}"` : `data-action="${q.action}" data-patient-id="${q.patientId}"`;
     return `<tr>
       <td>${patientLabel(p)}</td>
       <td>${badge(q.type, q.badge)}</td>
       <td>${esc(q.reason)}</td>
-      <td><button class="btn small secondary" data-action="open-patient" data-id="${q.patientId}">상세</button><button class="btn small tonal" data-action="${q.action}" data-patient-id="${q.patientId}">${q.actionLabel}</button></td>
+      <td><button class="btn small secondary" data-action="open-patient" data-id="${q.patientId}">상세</button><button class="btn small tonal" ${actionAttrs}>${q.actionLabel}</button></td>
     </tr>`;
   }
 
@@ -2187,7 +2463,7 @@
       dashboard: buildCareQueue().length,
       reports: Math.max(db.patients.filter((p) => needsReport(p.id)).length, db.careTasks.filter((task) => task.category === "progress_check" || task.phase !== "unknown").length),
       retention: buildCareQueue().filter((q) => q.type !== "리포트").length,
-      calendar: db.appointments.filter((a) => a.date === todayISO()).length
+      calendar: db.appointments.filter((a) => a.date === todayISO()).length + careTasksOn(todayISO()).length
     };
   }
 
@@ -2413,6 +2689,262 @@
   function latestDateForPatient(patientId) { return latestVisit(patientId)?.date || getPatient(patientId)?.createdAt || ""; }
   function nextVisitDate(patientId) { return latestVisit(patientId)?.nextVisitDate || ""; }
 
+  function sortHeader(scope, key, label) {
+    const currentKey = scope === "patients" ? state.patientSortKey : state.retentionSortKey;
+    const currentDir = scope === "patients" ? state.patientSortDir : state.retentionSortDir;
+    const mark = currentKey === key ? (currentDir === "asc" ? " ▲" : " ▼") : "";
+    return `<th><button class="sort-btn" data-action="sort-table" data-scope="${esc(scope)}" data-key="${esc(key)}">${esc(label)}${mark}</button></th>`;
+  }
+
+  function setSort(scope, key) {
+    if (scope === "patients") {
+      state.patientSortDir = state.patientSortKey === key && state.patientSortDir === "asc" ? "desc" : "asc";
+      state.patientSortKey = key;
+    } else {
+      state.retentionSortDir = state.retentionSortKey === key && state.retentionSortDir === "asc" ? "desc" : "asc";
+      state.retentionSortKey = key;
+    }
+    render();
+  }
+
+  function compareValues(a, b, dir) {
+    const emptyA = a === "" || a === null || a === undefined;
+    const emptyB = b === "" || b === null || b === undefined;
+    if (emptyA && emptyB) return 0;
+    if (emptyA) return 1;
+    if (emptyB) return -1;
+    const left = typeof a === "number" ? a : String(a);
+    const right = typeof b === "number" ? b : String(b);
+    const result = typeof left === "number" && typeof right === "number" ? left - right : left.localeCompare(right, "ko-KR", { numeric: true });
+    return dir === "desc" ? -result : result;
+  }
+
+  function patientSortValue(patient, key) {
+    const metrics = patientMetrics(patient.id);
+    return ({
+      name: patient.name || "",
+      status: patient.status || "",
+      latestVisit: latestDateForPatient(patient.id),
+      nextVisit: nextVisitDate(patient.id),
+      deltaWeight: metrics.deltaWeight,
+      report: needsReport(patient.id) ? 1 : 0
+    })[key] ?? "";
+  }
+
+  function retentionSortValue(row, key) {
+    const patient = getPatient(row.patientId);
+    return ({
+      patient: patient?.name || "",
+      type: row.type || "",
+      dueDate: row.dueDate || "",
+      status: row.status === "done" ? 1 : 0,
+      lastVisit: latestVisit(row.patientId)?.date || ""
+    })[key] ?? "";
+  }
+
+  function activeActionTemplates() {
+    return db.actionTemplates.filter((template) => template.active !== false);
+  }
+
+  function getActionTemplate(id) {
+    return db.actionTemplates.find((template) => template.id === id);
+  }
+
+  function actionCategoryOptions() {
+    return [
+      ["happy_call", "해피콜"],
+      ["progress_check", "경과확인"],
+      ["contact", "연락"],
+      ["appointment", "예약/내원"],
+      ["prescription", "처방"],
+      ["missed_call", "부재중"],
+      ["issue", "주의"],
+      ["refund", "환불"],
+      ["general_followup", "팔로업"]
+    ];
+  }
+
+  function actionChannelOptions() {
+    return [["sms", "문자"], ["phone", "전화"], ["kakao", "카카오"], ["unknown", "미정"]];
+  }
+
+  function renderTemplateCheckboxes() {
+    return activeActionTemplates().map((template) => `
+      <label class="template-check">
+        <input type="checkbox" name="autoTemplateIds" value="${esc(template.id)}" checked />
+        <span><b>${esc(template.name)}</b><small>등록 후 ${num(template.offsetDays)}일 · ${esc(careTaskChannelLabel(template.channel))}</small></span>
+      </label>
+    `).join("");
+  }
+
+  function selectedTemplateIdsFromForm(values) {
+    const raw = values.autoTemplateIds;
+    if (Array.isArray(raw)) return raw;
+    if (raw) return [raw];
+    return [];
+  }
+
+  function createInitialCareTasks(patient, templateIds) {
+    templateIds
+      .map(getActionTemplate)
+      .filter(Boolean)
+      .forEach((template) => {
+        const dueDate = addDays(patient.createdAt || todayISO(), template.offsetDays || 0);
+        upsert(db.careTasks, buildCareTaskFromTemplate(patient.id, template, dueDate));
+      });
+  }
+
+  function buildCareTaskFromTemplate(patientId, template, dueDate) {
+    const tpl = template || activeActionTemplates()[0] || defaultActionTemplates()[0];
+    return {
+      id: uid("task"),
+      patientId,
+      actionTemplateId: tpl.id,
+      actionName: tpl.name,
+      title: tpl.name,
+      category: tpl.category,
+      channel: tpl.channel,
+      dueDate,
+      dueTime: tpl.defaultTime || "10:00",
+      offsetDays: tpl.offsetDays || 0,
+      status: "open",
+      priority: "normal",
+      memo: tpl.description || "",
+      summary: tpl.description || "",
+      outcome: "",
+      completedAt: "",
+      createdAt: todayISO(),
+      schemaVersion: 2
+    };
+  }
+
+  function applyTemplateToCareTaskForm(form, templateId) {
+    const template = getActionTemplate(templateId);
+    if (!form || !template) return;
+    const offsetInput = form.querySelector("[name='offsetDays']");
+    const dueDateInput = form.querySelector("[name='dueDate']");
+    const dueTimeInput = form.querySelector("[name='dueTime']");
+    const categoryInput = form.querySelector("[name='category']");
+    const channelInput = form.querySelector("[name='channel']");
+    const actionInput = form.querySelector("[name='actionName']");
+    const memoInput = form.querySelector("[name='memo']");
+    if (offsetInput) offsetInput.value = template.offsetDays || 0;
+    if (dueDateInput) dueDateInput.value = addDays(todayISO(), template.offsetDays || 0);
+    if (dueTimeInput) dueTimeInput.value = template.defaultTime || "10:00";
+    if (categoryInput) categoryInput.value = template.category || "general_followup";
+    if (channelInput) channelInput.value = template.channel || "sms";
+    if (actionInput) actionInput.value = template.name || "";
+    if (memoInput && !memoInput.value) memoInput.value = template.description || "";
+  }
+
+  function toggleCareTaskDone(id) {
+    const task = db.careTasks.find((item) => item.id === id);
+    if (!task) return;
+    task.status = task.status === "done" ? "open" : "done";
+    task.completedAt = task.status === "done" ? todayISO() : "";
+    saveDb();
+    render();
+    toast(task.status === "done" ? "DONE 처리했습니다." : "DONE을 해제했습니다.");
+  }
+
+  function renderDoneCheckbox(id, checked) {
+    return `<label class="done-toggle" data-action="toggle-care-task-done" data-id="${esc(id)}"><input type="checkbox" ${checked ? "checked" : ""} data-action="toggle-care-task-done" data-id="${esc(id)}" /> <span>DONE</span></label>`;
+  }
+
+  function deleteActionTemplate(id) {
+    const linked = db.careTasks.some((task) => task.actionTemplateId === id);
+    if (linked && !confirm("이 템플릿으로 생성된 예정 액션이 있습니다. 템플릿만 삭제할까요?")) return;
+    if (!linked && !confirm("액션 템플릿을 삭제할까요?")) return;
+    db.actionTemplates = db.actionTemplates.filter((template) => template.id !== id);
+    saveDb();
+    render();
+    toast("액션 템플릿을 삭제했습니다.");
+  }
+
+  function shiftCalendarMonth(delta) {
+    const [year, month] = state.calendarMonth.split("-").map(Number);
+    const date = new Date(year, month - 1 + delta, 1);
+    state.calendarMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    render();
+  }
+
+  function careTasksOn(date) {
+    return db.careTasks
+      .filter((task) => task.dueDate === date)
+      .sort((a, b) => `${a.dueTime || ""} ${a.actionName || a.title || ""}`.localeCompare(`${b.dueTime || ""} ${b.actionName || b.title || ""}`, "ko-KR", { numeric: true }));
+  }
+
+  function renderCalendarTask(task) {
+    const patient = getPatient(task.patientId);
+    const done = task.status === "done";
+    return `<div class="cal-task ${done ? "done" : ""}">
+      <button class="cal-task-title" data-action="edit-care-task" data-id="${esc(task.id)}">✓ ${esc(patient?.name || "환자")} ${esc(task.actionName || task.title || careTaskCategoryLabel(task.category))}</button>
+      ${renderDoneCheckbox(task.id, done)}
+    </div>`;
+  }
+
+  function patientProgressRows(patientId) {
+    const rows = [];
+    careTasksFor(patientId).forEach((task) => rows.push({
+      kind: "careTask",
+      id: task.id,
+      date: task.dueDate || task.createdAt || "",
+      name: task.actionName || task.title || careTaskCategoryLabel(task.category),
+      category: careTaskCategoryLabel(task.category),
+      status: task.status || "open",
+      memo: task.outcome || task.memo || task.summary || "",
+      done: task.status === "done"
+    }));
+    visitsFor(patientId).forEach((visit) => rows.push({
+      kind: "visit",
+      id: visit.id,
+      date: visit.date,
+      name: `${visit.visitType || "방문"} 방문`,
+      category: "방문",
+      status: "done",
+      memo: [visit.assessment, visit.plan].filter(Boolean).join(" / "),
+      done: true
+    }));
+    messagesFor(patientId).forEach((message) => rows.push({
+      kind: "message",
+      id: message.id,
+      date: message.date,
+      name: message.template || "문자 기록",
+      category: message.channel || "문자",
+      status: message.status,
+      memo: message.body,
+      done: message.status === "sent"
+    }));
+    db.appointments.filter((appt) => appt.patientId === patientId).forEach((appt) => rows.push({
+      kind: "appointment",
+      id: appt.id,
+      date: appt.date,
+      name: `${appt.time || ""} ${appt.type || "예약"}`.trim(),
+      category: "예약",
+      status: appt.status,
+      memo: appt.memo || "",
+      done: appt.status === "done"
+    }));
+    return rows.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  }
+
+  function renderProgressRow(row) {
+    const actionButton = row.kind === "careTask"
+      ? `<button class="btn small secondary" data-action="edit-care-task" data-id="${row.id}">수정</button>`
+      : row.kind === "visit"
+        ? `<button class="btn small secondary" data-action="edit-visit" data-id="${row.id}">수정</button>`
+        : "";
+    return `<tr>
+      <td>${row.kind === "careTask" ? renderDoneCheckbox(row.id, row.done) : (row.done ? "✓" : "")}</td>
+      <td><div class="strong">${esc(row.name)}</div></td>
+      <td>${badge(row.category, row.kind === "careTask" ? "blue" : "")}</td>
+      <td>${formatDate(row.date)}</td>
+      <td>${statusBadge(row.status)}</td>
+      <td>${esc(row.memo || "-")}</td>
+      <td>${actionButton}</td>
+    </tr>`;
+  }
+
   function upsert(collection, record) {
     const index = collection.findIndex((item) => item.id === record.id);
     if (index >= 0) collection[index] = record;
@@ -2486,6 +3018,7 @@
       unpaid: ["미수", "red"],
       refunded: ["환불", ""],
       queued: ["발송대기", "amber"],
+      open: ["대기", "amber"],
       sent: ["발송기록", "green"],
       failed: ["실패", "red"],
       canceled: ["취소", ""],
@@ -2561,7 +3094,9 @@
   }
 
   function todayISO() {
-    return "2026-05-12";
+    const now = new Date();
+    const offset = now.getTimezoneOffset() * 60000;
+    return new Date(now.getTime() - offset).toISOString().slice(0, 10);
   }
 
   function addDays(dateStr, days) {
@@ -2579,7 +3114,7 @@
   function age(birth) {
     if (!birth) return "-";
     const year = Number(birth.slice(0, 4));
-    return Number.isFinite(year) ? 2026 - year : "-";
+    return Number.isFinite(year) ? new Date().getFullYear() - year : "-";
   }
 
   function byDateTime(a, b) {

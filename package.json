@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check app.js && node --check scripts/import-exportblock-to-firestore.mjs && node --check scripts/export-renewd-firestore.mjs && node --check scripts/import-renewd-firestore.mjs",
+    "check": "node --check app.js && node --check scripts/import-exportblock-to-firestore.mjs && node --check scripts/export-renewd-firestore.mjs && node --check scripts/import-renewd-firestore.mjs && node --check scripts/migrate-care-actions.mjs",
     "migrate:dry-run": "node scripts/import-exportblock-to-firestore.mjs --dry-run",
     "migrate:exportblock": "node scripts/import-exportblock-to-firestore.mjs",
+    "migrate:care-actions": "node scripts/migrate-care-actions.mjs",
     "firestore:export": "node scripts/export-renewd-firestore.mjs",
     "firestore:import": "node scripts/import-renewd-firestore.mjs"
   },
