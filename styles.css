@@ -849,67 +849,182 @@ tbody tr.clickable:hover {
   padding: 10px;
 }
 
-.request-layout {
-  grid-template-columns: minmax(300px, 0.85fr) minmax(420px, 1.2fr);
-  align-items: start;
-}
-
-.request-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.request-card {
+.request-chat-shell {
+  max-width: 960px;
+  margin: 0 auto;
   border: 1px solid var(--gray-200);
   border-radius: 8px;
   background: var(--white);
-  box-shadow: 0 1px 2px rgba(20, 28, 40, 0.03);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
-.request-card-main {
-  padding: 14px;
+.request-thread {
+  min-height: 420px;
+  max-height: calc(100vh - 320px);
+  overflow: auto;
+  padding: 18px;
+  background: linear-gradient(180deg, var(--white), var(--gray-50));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.request-card-head {
+.request-chat-card {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 10px;
 }
 
-.request-title {
+.chat-message {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.chat-message.user {
+  justify-content: flex-end;
+}
+
+.chat-message.user .chat-bubble {
+  background: var(--blue-600);
+  border-color: var(--blue-600);
+  color: var(--white);
+}
+
+.chat-message.user .chat-name,
+.chat-message.user .chat-meta {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.chat-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--blue-100);
+  color: var(--blue-700);
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  font-weight: 900;
+}
+
+.chat-bubble {
+  max-width: min(680px, 100%);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgba(20, 28, 40, 0.04);
+}
+
+.chat-name {
+  margin-bottom: 6px;
+  color: var(--gray-600);
+  font-size: 12px;
   font-weight: 800;
-  line-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.request-body {
-  margin-top: 10px;
-  color: var(--gray-800);
-  line-height: 1.5;
+.chat-text {
+  line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.request-image {
+.chat-meta {
+  margin-top: 8px;
+  color: var(--gray-500);
+  font-size: 11px;
+}
+
+.chat-image {
   display: block;
   width: 100%;
-  max-height: 360px;
-  margin-top: 12px;
-  border: 1px solid var(--gray-200);
+  max-height: 320px;
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
   border-radius: 8px;
   background: var(--gray-50);
   object-fit: contain;
 }
 
-.request-card-actions {
-  padding: 10px 14px;
-  border-top: 1px solid var(--gray-200);
-  background: var(--gray-50);
+.request-admin-actions {
+  width: min(360px, 100%);
+  margin-left: auto;
+  padding: 0 2px 2px;
   display: grid;
   grid-template-columns: minmax(130px, 1fr) auto;
   gap: 8px;
+}
+
+.chat-empty {
+  border: 1px dashed var(--gray-300);
+  border-radius: 8px;
+  padding: 18px;
+  color: var(--gray-600);
+  text-align: center;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.chat-composer {
+  border-top: 1px solid var(--gray-200);
+  padding: 12px;
+  background: var(--white);
+}
+
+.chat-input {
+  width: 100%;
+  min-height: 94px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  padding: 12px;
+  resize: vertical;
+  outline: 0;
+  font: inherit;
+}
+
+.chat-input:focus,
+.chat-requester:focus {
+  border-color: var(--blue-500);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.chat-composer-foot {
+  margin-top: 10px;
+  display: flex;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-file {
+  min-height: 36px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 800;
+  cursor: pointer;
+  background: var(--white);
+}
+
+.chat-file input {
+  display: none;
+}
+
+.chat-requester {
+  width: 160px;
+  min-height: 36px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  padding: 0 11px;
+  font: inherit;
+  outline: 0;
 }
 
 .calendar-grid {
@@ -1182,6 +1297,28 @@ tbody tr.clickable:hover {
 
   .calendar-grid {
     grid-template-columns: 1fr;
+  }
+
+  .request-chat-shell {
+    max-width: none;
+  }
+
+  .request-thread {
+    max-height: none;
+  }
+
+  .chat-bubble,
+  .chat-message.user .chat-bubble {
+    max-width: 100%;
+  }
+
+  .chat-requester {
+    width: 100%;
+  }
+
+  .request-admin-actions {
+    width: 100%;
+    margin-left: 0;
   }
 }
 

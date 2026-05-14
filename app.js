@@ -1301,65 +1301,67 @@
   function renderDevelopmentRequests() {
     const requests = db.developmentRequests
       .slice()
-      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     const openCount = requests.filter((request) => !["request_done", "request_on_hold"].includes(request.status)).length;
     return `
       <div class="page-head">
         <div>
           <div class="page-title">개발 요청 사항</div>
-          <div class="page-sub">운영 중 필요한 개선 요청을 모읍니다.</div>
+          <div class="page-sub">필요한 개선사항을 대화하듯 남겨주세요.</div>
         </div>
         <div class="spacer"></div>
         ${badge(`미완료 ${openCount}`, openCount ? "amber" : "green")}
         ${badge(`전체 ${requests.length}`, "blue")}
       </div>
-      <div class="grid cols-2 request-layout">
-        <div class="card">
-          <div class="card-head">
-            <div>
-              <div class="card-title">요청 등록</div>
-              <div class="card-sub">텍스트는 필수, 이미지는 선택입니다.</div>
+      <div class="request-chat-shell">
+        <div class="request-thread">
+          <div class="chat-message assistant">
+            <div class="chat-avatar">R</div>
+            <div class="chat-bubble">
+              <div class="chat-name">Renewd 개발 요청 접수</div>
+              <div class="chat-text">어떤 점을 도와드릴까요? 화면에서 불편했던 점, 원하는 기능, 캡처 이미지를 편하게 남겨주세요.</div>
             </div>
           </div>
-          <div class="card-body">
-            <form data-form="developmentRequest" class="stack">
-              <div class="form-grid">
-                ${field("제목", "title", "", "text", false, "예: 환자 검색 개선")}
-                ${field("작성자", "requester", "", "text", false, "예: 준수")}
-                ${textareaField("요청 내용", "body", "", "요청 내용을 입력하세요", "wide")}
-                <div class="field wide">
-                  <label>이미지 첨부</label>
-                  <input class="input" name="requestImage" type="file" accept="image/*" />
-                </div>
-              </div>
-              <div class="form-actions">
-                <button class="btn primary" type="submit">요청 등록</button>
-              </div>
-            </form>
+          ${requests.map(renderDevelopmentRequestCard).join("") || `
+            <div class="chat-empty">
+              아직 접수된 요청이 없습니다. 아래 입력창에 첫 요청을 남겨보세요.
+            </div>
+          `}
+        </div>
+        <form data-form="developmentRequest" class="chat-composer">
+          <textarea class="chat-input" name="body" rows="4" placeholder="예: 환자 등록할 때 체크한 케어 업무가 상세에 바로 보였으면 좋겠어요. 캘린더 화면에서도 수정/생성이 되면 좋겠습니다."></textarea>
+          <div class="chat-composer-foot">
+            <label class="chat-file">
+              <input name="requestImage" type="file" accept="image/*" />
+              <span>이미지 첨부</span>
+            </label>
+            <input class="chat-requester" name="requester" type="text" placeholder="작성자" />
+            <button class="btn primary" type="submit">보내기</button>
           </div>
-        </div>
-        <div class="request-list">
-          ${requests.map(renderDevelopmentRequestCard).join("") || empty("등록된 개발 요청이 없습니다.")}
-        </div>
+        </form>
       </div>
     `;
   }
 
   function renderDevelopmentRequestCard(request) {
     return `
-      <article class="request-card">
-        <div class="request-card-main">
-          <div class="request-card-head">
-            <div>
-              <div class="request-title">${esc(request.title || "제목 없음")}</div>
-              <div class="muted" style="font-size:12px">${formatDate(request.createdAt)}${request.requester ? ` · ${esc(request.requester)}` : ""}</div>
-            </div>
-            ${statusBadge(request.status)}
+      <article class="request-chat-card">
+        <div class="chat-message user">
+          <div class="chat-bubble">
+            <div class="chat-name">${esc(request.requester || "이용자")} ${statusBadge(request.status)}</div>
+            <div class="chat-text">${esc(request.body || "")}</div>
+            ${request.imageDataUrl ? `<img class="chat-image" src="${request.imageDataUrl}" alt="${esc(request.imageName || "첨부 이미지")}" />` : ""}
+            <div class="chat-meta">${formatDate(request.createdAt)} · ${esc(request.title || autoDevelopmentRequestTitle(request.body))}</div>
           </div>
-          <div class="request-body">${esc(request.body || "")}</div>
-          ${request.imageDataUrl ? `<img class="request-image" src="${request.imageDataUrl}" alt="${esc(request.imageName || "첨부 이미지")}" />` : ""}
         </div>
-        <div class="request-card-actions">
+        <div class="chat-message assistant">
+          <div class="chat-avatar">R</div>
+          <div class="chat-bubble">
+            <div class="chat-name">Renewd 개발 요청 접수</div>
+            <div class="chat-text">${esc(request.assistantReply || developmentRequestAutoReply())}</div>
+          </div>
+        </div>
+        <div class="request-admin-actions">
           <select class="select" data-action="development-request-status" data-id="${esc(request.id)}" aria-label="개발 요청 상태">
             ${developmentRequestStatusOptions().map(([value, label]) => option(value, label, request.status)).join("")}
           </select>
@@ -1367,6 +1369,15 @@
         </div>
       </article>
     `;
+  }
+
+  function developmentRequestAutoReply() {
+    return "요청을 접수했습니다. 남겨주신 내용과 이미지를 확인한 뒤, 더 필요한 부분이 있으면 확인 후 응대해드리겠습니다.";
+  }
+
+  function autoDevelopmentRequestTitle(body) {
+    const line = String(body || "").trim().split(/\r?\n/).find(Boolean) || "개발 요청";
+    return line.length > 36 ? `${line.slice(0, 36)}...` : line;
   }
 
   function renderStats() {
@@ -2294,10 +2305,11 @@
     }
     db.developmentRequests.push({
       id: uid("devreq"),
-      title: String(v.title || "").trim(),
+      title: autoDevelopmentRequestTitle(bodyText),
       requester: String(v.requester || "").trim(),
       body: bodyText,
       status: "request_received",
+      assistantReply: developmentRequestAutoReply(),
       imageDataUrl: image?.dataUrl || "",
       imageName: image?.name || "",
       imageType: image?.type || "",
