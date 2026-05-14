@@ -36,6 +36,12 @@
     calendarMonth: "",
     patientSearch: "",
     patientFilter: "all",
+    retentionOwnerFilter: "all",
+    retentionStageFilter: "all",
+    retentionTaskStatusFilter: "all",
+    retentionCategoryFilter: "all",
+    retentionChannelFilter: "all",
+    retentionDueFilter: "all",
     patientSortKey: "latestVisit",
     patientSortDir: "desc",
     retentionSortKey: "dueDate",
@@ -686,12 +692,10 @@
 
   function renderPatientDirectoryCard() {
     const filtered = db.patients
-      .filter((p) => state.patientFilter === "all" || p.status === state.patientFilter)
-      .filter((p) => {
-        const text = `${p.name} ${p.phone} ${p.chartNo} ${p.notes}`.toLowerCase();
-        return text.includes(state.patientSearch.toLowerCase());
-      })
-      .sort((a, b) => compareValues(patientSortValue(a, state.patientSortKey), patientSortValue(b, state.patientSortKey), state.patientSortDir));
+      .map((p) => ({ p, metrics: patientMetrics(p.id), summary: retentionSummaryForPatient(p.id) }))
+      .filter(retentionDirectoryRowMatches)
+      .sort((a, b) => compareValues(patientSortValue(a.p, state.patientSortKey), patientSortValue(b.p, state.patientSortKey), state.patientSortDir));
+    const stats = retentionDirectoryStats(filtered);
     return `
       <div class="card">
         <div class="card-head toolbar">
@@ -700,15 +704,23 @@
             <div class="card-sub">환자 이름을 클릭하면 바로 상세로 이동합니다.</div>
           </div>
           <input class="input" style="max-width:320px" placeholder="이름, 전화번호, 차트번호 검색" value="${esc(state.patientSearch)}" data-action="patient-search" />
-          <select class="select" style="max-width:180px" data-action="patient-filter">
-            ${option("all", "전체", state.patientFilter)}
-            ${option("new", "신규", state.patientFilter)}
-            ${option("active", "진행중", state.patientFilter)}
-            ${option("retention_risk", "이탈위험", state.patientFilter)}
-            ${option("closed", "종료", state.patientFilter)}
-          </select>
           <div class="spacer"></div>
           <span class="badge">${filtered.length}명</span>
+        </div>
+        <div class="retention-filter-bar">
+          ${renderRetentionFilter("patient-filter", "환자상태", state.patientFilter, patientStatusFilterOptions())}
+          ${renderRetentionFilter("retention-owner-filter", "담당", state.retentionOwnerFilter, retentionOwnerFilterOptions())}
+          ${renderRetentionFilter("retention-stage-filter", "리텐션", state.retentionStageFilter, retentionStageFilterOptions())}
+          ${renderRetentionFilter("retention-task-status-filter", "업무상태", state.retentionTaskStatusFilter, retentionTaskStatusOptions())}
+          ${renderRetentionFilter("retention-category-filter", "분류", state.retentionCategoryFilter, [["all", "전체"], ...actionCategoryOptions()])}
+          ${renderRetentionFilter("retention-channel-filter", "채널", state.retentionChannelFilter, [["all", "전체"], ...actionChannelOptions()])}
+          ${renderRetentionFilter("retention-due-filter", "예정일", state.retentionDueFilter, retentionDueFilterOptions())}
+          <div class="retention-signal-strip">
+            ${badge(`미완료 ${stats.open}`, stats.open ? "amber" : "")}
+            ${badge(`완료 ${stats.done}`, "green")}
+            ${badge(`지연 ${stats.overdue}`, stats.overdue ? "red" : "")}
+            ${badge(`오늘 ${stats.today}`, stats.today ? "blue" : "")}
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -717,28 +729,24 @@
               ${sortHeader("patients", "status", "상태")}
               ${sortHeader("patients", "latestVisit", "최근 방문")}
               ${sortHeader("patients", "nextVisit", "다음 방문")}
+              <th>메모</th>
               ${sortHeader("patients", "deltaWeight", "체중 변화")}
               ${sortHeader("patients", "report", "리포트")}
               <th>액션</th>
             </tr></thead>
             <tbody>
-              ${filtered.map((p) => {
-                const metrics = patientMetrics(p.id);
-                const lastVisit = latestVisit(p.id);
-                const next = nextVisitDate(p.id);
+              ${filtered.length ? filtered.map(({ p, metrics, summary }) => {
                 return `<tr class="clickable" data-action="open-patient" data-id="${p.id}">
                   <td>${patientOpenButton(p)}</td>
-                  <td>${statusBadge(p.status)}</td>
-                  <td>${lastVisit ? formatDate(lastVisit.date) : "-"}</td>
-                  <td>${next ? formatDate(next) : "-"}</td>
+                  <td>${renderRetentionStageSelect(p.id)}</td>
+                  <td>${renderRetentionDateCell(summary.recentDate, summary.recentLabel)}</td>
+                  <td>${renderRetentionDateCell(summary.nextDate, summary.nextLabel, renderDueSignal(summary.nextDate, summary.nextTask))}</td>
+                  <td><div class="memo-preview" title="${esc(retentionMemoPreview(p.id, summary))}">${esc(retentionMemoPreview(p.id, summary) || "-")}</div></td>
                   <td>${metrics.deltaWeight === null ? "-" : badge(`${fmtSigned(metrics.deltaWeight)}kg`, metrics.deltaWeight <= 0 ? "green" : "red")}</td>
                   <td>${needsReport(p.id) ? badge("발행대기", "amber") : badge("최신", "green")}</td>
-                  <td>
-                    <button class="btn small secondary" data-action="edit-patient" data-id="${p.id}">수정</button>
-                    <button class="btn small ghost" data-action="open-patient" data-id="${p.id}">열기</button>
-                  </td>
+                  <td>${renderPatientDirectoryActions(p.id, summary)}</td>
                 </tr>`;
-              }).join("")}
+              }).join("") : `<tr><td colspan="8">${empty("조건에 맞는 환자가 없습니다.")}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -941,7 +949,7 @@
   }
 
   function renderCareTaskTab(patient) {
-    const tasks = careTasksFor(patient.id).slice().sort((a, b) => String(b.dueDate || "").localeCompare(String(a.dueDate || "")));
+    const tasks = careTasksFor(patient.id).slice().sort(compareCareTasksForRetention);
     return `
       <div class="page-head compact">
         <div><div class="page-title" style="font-size:18px">케어 업무</div><div class="page-sub">등록 후 n일 뒤 수행할 액션과 ExportBlock에서 가져온 연락 업무입니다.</div></div>
@@ -958,10 +966,10 @@
               <td>${statusBadge(task.status)}</td>
               <td>${badge(careTaskCategoryLabel(task.category), careTaskBadge(task))}</td>
               <td>${esc(careTaskChannelLabel(task.channel))}</td>
-              <td>${esc(task.actionName || task.title || "-")}</td>
+              <td>${esc(careTaskDisplayName(task))}</td>
               <td>${esc(task.summary || task.memo || "-")}</td>
               <td><button class="btn small secondary" data-action="edit-care-task" data-id="${task.id}">수정</button><button class="btn small ghost" data-action="delete-care-task" data-id="${task.id}">삭제</button></td>
-            </tr>`).join("") || `<tr><td colspan="8">${empty("가져온 케어 업무가 없습니다.")}</td></tr>`}</tbody>
+            </tr>`).join("") || `<tr><td colspan="8">${empty("등록된 케어 업무가 없습니다.")}</td></tr>`}</tbody>
           </table>
         </div>
       </div>
@@ -1304,7 +1312,7 @@
     const el = event.target.closest("[data-action]");
     if (!el) return;
     const action = el.dataset.action;
-    if (!["patient-search", "patient-filter", "report-patient"].includes(action)) event.preventDefault();
+    if (!["patient-search", "patient-filter", "report-patient", "retention-stage-select", "retention-owner-filter", "retention-stage-filter", "retention-task-status-filter", "retention-category-filter", "retention-channel-filter", "retention-due-filter"].includes(action)) event.preventDefault();
     event.stopPropagation();
 
     switch (action) {
@@ -1331,6 +1339,9 @@
         break;
       case "edit-patient":
         openPatientModal(el.dataset.id);
+        break;
+      case "delete-patient":
+        deletePatient(el.dataset.id);
         break;
       case "new-visit":
         openVisitModal(null, el.dataset.patientId);
@@ -1485,6 +1496,23 @@
     if (el.dataset.action === "patient-filter") {
       state.patientFilter = el.value;
       render();
+      return;
+    }
+    const retentionFilterStateKey = ({
+      "retention-owner-filter": "retentionOwnerFilter",
+      "retention-stage-filter": "retentionStageFilter",
+      "retention-task-status-filter": "retentionTaskStatusFilter",
+      "retention-category-filter": "retentionCategoryFilter",
+      "retention-channel-filter": "retentionChannelFilter",
+      "retention-due-filter": "retentionDueFilter"
+    })[el.dataset.action];
+    if (retentionFilterStateKey) {
+      state[retentionFilterStateKey] = el.value;
+      render();
+      return;
+    }
+    if (el.dataset.action === "retention-stage-select") {
+      updateRetentionStage(el.dataset.patientId, el.value);
       return;
     }
     if (el.dataset.action === "report-patient") {
@@ -2410,7 +2438,7 @@
         if (!task.patientId || !getPatient(task.patientId)) return;
         const dueGap = task.dueDate ? daysBetween(today, task.dueDate) : null;
         const dueText = task.dueDate ? (dueGap < 0 ? `${Math.abs(dueGap)}일 지남` : dueGap === 0 ? "오늘 예정" : `D-${dueGap}`) : "날짜 미정";
-        const reason = [dueText, task.summary || task.memo || task.actionName || task.title].filter(Boolean).join(" · ");
+        const reason = [dueText, task.summary || task.memo || careTaskDisplayName(task)].filter(Boolean).join(" · ");
         out.push(queueItem(task.patientId, careTaskCategoryLabel(task.category), reason, careTaskBadge(task), "edit-care-task", "수정", task.id, task.dueDate, task.status));
       });
     patients.forEach((p) => {
@@ -2579,6 +2607,62 @@
     toast("방문기록을 삭제했습니다.");
   }
 
+  function deletePatient(id) {
+    const patient = getPatient(id);
+    if (!patient) return toast("환자를 찾을 수 없습니다.");
+    const linked = patientLinkedRecordCounts(id);
+    const message = [
+      `${patient.name} 환자를 삭제할까요?`,
+      "연결된 기록도 함께 삭제됩니다.",
+      "",
+      `방문기록: ${linked.visits}건`,
+      `체성분: ${linked.bodyCompositions}건`,
+      `리포트: ${linked.reports}건`,
+      `결제: ${linked.payments}건`,
+      `사진: ${linked.photos}건`,
+      `예약: ${linked.appointments}건`,
+      `문자: ${linked.messages}건`,
+      `케어 업무: ${linked.careTasks}건`
+    ].join("\n");
+    if (!confirm(message)) return;
+
+    db.patients = db.patients.filter((p) => p.id !== id);
+    [
+      "visits",
+      "bodyCompositions",
+      "reports",
+      "payments",
+      "photos",
+      "appointments",
+      "messages",
+      "careTasks"
+    ].forEach((collection) => {
+      db[collection] = db[collection].filter((item) => item.patientId !== id);
+    });
+
+    const nextPatientId = db.patients[0]?.id || null;
+    if (state.currentPatientId === id) state.currentPatientId = nextPatientId;
+    if (state.reportPatientId === id) state.reportPatientId = nextPatientId;
+    if (state.view === "detail" && !nextPatientId) state.view = "retention";
+
+    saveDb();
+    render();
+    toast("환자와 연결 기록을 삭제했습니다.");
+  }
+
+  function patientLinkedRecordCounts(patientId) {
+    return {
+      visits: db.visits.filter((item) => item.patientId === patientId).length,
+      bodyCompositions: db.bodyCompositions.filter((item) => item.patientId === patientId).length,
+      reports: db.reports.filter((item) => item.patientId === patientId).length,
+      payments: db.payments.filter((item) => item.patientId === patientId).length,
+      photos: db.photos.filter((item) => item.patientId === patientId).length,
+      appointments: db.appointments.filter((item) => item.patientId === patientId).length,
+      messages: db.messages.filter((item) => item.patientId === patientId).length,
+      careTasks: db.careTasks.filter((item) => item.patientId === patientId).length
+    };
+  }
+
   function deleteRecord(collection, id, message) {
     if (!confirm("삭제할까요?")) return;
     db[collection] = db[collection].filter((x) => x.id !== id);
@@ -2688,6 +2772,262 @@
     if (task.channel === "kakao") return "카카오기록";
     return "문자기록";
   }
+
+  function careTaskDisplayName(task) {
+    return task.actionName || task.title || careTaskCategoryLabel(task.category);
+  }
+
+  function compareCareTasksForRetention(a, b) {
+    const aOpen = !["done", "canceled"].includes(a.status);
+    const bOpen = !["done", "canceled"].includes(b.status);
+    if (aOpen !== bOpen) return aOpen ? -1 : 1;
+    if (aOpen) {
+      const due = String(a.dueDate || "9999-12-31").localeCompare(String(b.dueDate || "9999-12-31"));
+      if (due) return due;
+      const time = String(a.dueTime || "").localeCompare(String(b.dueTime || ""));
+      if (time) return time;
+      return careTaskDisplayName(a).localeCompare(careTaskDisplayName(b), "ko-KR", { numeric: true });
+    }
+    return String(retentionTaskDate(b)).localeCompare(String(retentionTaskDate(a)));
+  }
+
+  function retentionStageOptions() {
+    return [
+      { value: "in_progress", label: "진행중", category: "general_followup", channel: "unknown", actionName: "진행중", memo: "리텐션 진행 상태로 표시" },
+      { value: "progress_call", label: "경과전화", category: "progress_check", channel: "phone", actionName: "경과전화", memo: "경과 확인 전화" },
+      { value: "happy_call", label: "해피콜", category: "happy_call", channel: "phone", actionName: "해피콜", memo: "해피콜 연락" },
+      { value: "message", label: "문자", category: "contact", channel: "sms", actionName: "문자", memo: "문자 연락" }
+    ];
+  }
+
+  function retentionStageOption(value) {
+    return retentionStageOptions().find((stage) => stage.value === value) || retentionStageOptions()[0];
+  }
+
+  function primaryOpenCareTask(patientId) {
+    return careTasksFor(patientId)
+      .filter((task) => !["done", "canceled"].includes(task.status))
+      .sort((a, b) => {
+        const byDueDate = String(a.dueDate || "9999-12-31").localeCompare(String(b.dueDate || "9999-12-31"));
+        if (byDueDate) return byDueDate;
+        return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      })[0];
+  }
+
+  function retentionStageForTask(task) {
+    if (!task) return "in_progress";
+    if (task.category === "happy_call") return "happy_call";
+    if (task.category === "progress_check") return "progress_call";
+    if (task.category === "contact" || task.channel === "sms" || task.channel === "kakao") return "message";
+    return "in_progress";
+  }
+
+  function currentRetentionStageValue(patientId) {
+    return retentionStageForTask(primaryOpenCareTask(patientId));
+  }
+
+  function renderRetentionStageSelect(patientId) {
+    const selected = currentRetentionStageValue(patientId);
+    return `<select class="select" style="min-width:118px" data-action="retention-stage-select" data-patient-id="${esc(patientId)}" aria-label="리텐션 상태">${retentionStageOptions().map((stage) => option(stage.value, stage.label, selected)).join("")}</select>`;
+  }
+
+  function retentionSummaryForPatient(patientId) {
+    const today = todayISO();
+    const tasks = careTasksFor(patientId);
+    const hasTasks = tasks.length > 0;
+    const recentTask = tasks
+      .filter((task) => task.status === "done" || (task.dueDate && daysBetween(task.dueDate, today) >= 0))
+      .sort((a, b) => String(retentionTaskDate(b)).localeCompare(String(retentionTaskDate(a))))[0];
+    const nextTask = primaryOpenCareTask(patientId);
+    const last = latestVisit(patientId);
+    const visitNext = nextVisitDate(patientId);
+
+    return {
+      recentTask,
+      nextTask,
+      recentDate: recentTask ? retentionTaskDate(recentTask) : (!hasTasks ? (last?.date || getPatient(patientId)?.createdAt || "") : ""),
+      recentLabel: recentTask ? careTaskCategoryLabel(recentTask.category) : (!hasTasks ? (last ? "방문" : "등록") : ""),
+      nextDate: nextTask ? (nextTask.dueDate || "") : (!hasTasks ? (visitNext || "") : ""),
+      nextLabel: nextTask ? careTaskDisplayName(nextTask) : (!hasTasks && visitNext ? "다음 방문" : "")
+    };
+  }
+
+  function retentionTaskDate(task) {
+    return task.completedAt || task.dueDate || task.createdAt || "";
+  }
+
+  function renderRetentionDateCell(date, label, signal = "") {
+    if (!date) return "-";
+    return `<div class="strong">${formatDate(date)}</div><div class="retention-date-meta">${label ? `<span class="muted">${esc(label)}</span>` : ""}${signal}</div>`;
+  }
+
+  function renderRetentionFilter(action, label, value, options) {
+    return `<label class="retention-filter"><span>${esc(label)}</span><select class="select" data-action="${esc(action)}">${options.map(([v, text]) => option(v, text, value)).join("")}</select></label>`;
+  }
+
+  function patientStatusFilterOptions() {
+    return [["all", "전체"], ["new", "신규"], ["active", "진행중"], ["retention_risk", "이탈위험"], ["closed", "종료"]];
+  }
+
+  function retentionOwnerFilterOptions() {
+    const owners = [...new Set(db.patients.map((patient) => patient.primaryDoctor || "미지정"))].sort((a, b) => a.localeCompare(b, "ko-KR"));
+    return [["all", "전체"], ...owners.map((owner) => [owner, owner])];
+  }
+
+  function retentionStageFilterOptions() {
+    return [["all", "전체"], ...retentionStageOptions().map((stage) => [stage.value, stage.label])];
+  }
+
+  function retentionTaskStatusOptions() {
+    return [["all", "전체"], ["open", "미완료"], ["done", "완료만"], ["overdue", "지연"], ["canceled", "취소"], ["none", "업무 없음"]];
+  }
+
+  function retentionDueFilterOptions() {
+    return [["all", "전체"], ["overdue", "지연"], ["today", "오늘"], ["d1", "D-1"], ["d3", "D-3"], ["d7", "D-7"], ["future", "D-8 이후"], ["none", "예정 없음"]];
+  }
+
+  function retentionDirectoryRowMatches({ p, summary }) {
+    if (state.patientFilter !== "all" && p.status !== state.patientFilter) return false;
+    if (state.retentionOwnerFilter !== "all" && (p.primaryDoctor || "미지정") !== state.retentionOwnerFilter) return false;
+    if (state.retentionStageFilter !== "all" && currentRetentionStageValue(p.id) !== state.retentionStageFilter) return false;
+    if (!retentionTaskStatusMatches(p.id, summary, state.retentionTaskStatusFilter)) return false;
+    if (!retentionDueMatches(summary.nextTask?.dueDate || "", state.retentionDueFilter)) return false;
+
+    const task = retentionTaskForFilters(summary);
+    if (state.retentionCategoryFilter !== "all" && task?.category !== state.retentionCategoryFilter) return false;
+    if (state.retentionChannelFilter !== "all" && task?.channel !== state.retentionChannelFilter) return false;
+
+    const search = state.patientSearch.trim().toLowerCase();
+    if (!search) return true;
+    const text = `${p.name} ${p.phone} ${p.chartNo} ${p.notes} ${retentionMemoPreview(p.id, summary)}`.toLowerCase();
+    return text.includes(search);
+  }
+
+  function retentionTaskStatusMatches(patientId, summary, status) {
+    if (status === "all") return true;
+    const tasks = careTasksFor(patientId);
+    const openTasks = tasks.filter((task) => !["done", "canceled"].includes(task.status));
+    if (status === "none") return tasks.length === 0;
+    if (status === "open") return openTasks.length > 0;
+    if (status === "done") return tasks.length > 0 && openTasks.length === 0 && tasks.some((task) => task.status === "done");
+    if (status === "canceled") return tasks.some((task) => task.status === "canceled");
+    if (status === "overdue") return isOverdueTask(summary.nextTask);
+    return true;
+  }
+
+  function retentionDueMatches(date, filter) {
+    if (filter === "all") return true;
+    if (!date) return filter === "none";
+    const gap = daysBetween(todayISO(), date);
+    return ({
+      overdue: gap < 0,
+      today: gap === 0,
+      d1: gap >= 0 && gap <= 1,
+      d3: gap >= 0 && gap <= 3,
+      d7: gap >= 0 && gap <= 7,
+      future: gap > 7,
+      none: false
+    })[filter] || false;
+  }
+
+  function retentionTaskForFilters(summary) {
+    return summary.nextTask || summary.recentTask;
+  }
+
+  function retentionDirectoryStats(rows) {
+    const patientIds = new Set(rows.map(({ p }) => p.id));
+    return db.careTasks.reduce((stats, task) => {
+      if (!patientIds.has(task.patientId)) return stats;
+      if (task.status === "done") stats.done += 1;
+      if (!["done", "canceled"].includes(task.status)) {
+        stats.open += 1;
+        if (isOverdueTask(task)) stats.overdue += 1;
+        if (task.dueDate && daysBetween(todayISO(), task.dueDate) === 0) stats.today += 1;
+      }
+      return stats;
+    }, { open: 0, done: 0, overdue: 0, today: 0 });
+  }
+
+  function renderDueSignal(date, task) {
+    if (!date || !task || ["done", "canceled"].includes(task.status)) return "";
+    const gap = daysBetween(todayISO(), date);
+    if (gap < 0) return badge(`${Math.abs(gap)}일 지남`, "red");
+    if (gap === 0) return badge("오늘", "amber");
+    if (gap <= 1) return badge("D-1", "red");
+    if (gap <= 3) return badge(`D-${gap}`, "amber");
+    if (gap <= 7) return badge(`D-${gap}`, "blue");
+    return "";
+  }
+
+  function retentionMemoPreview(patientId, summary) {
+    const task = retentionTaskForFilters(summary);
+    const latestMessage = messagesFor(patientId).slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))[0];
+    const patient = getPatient(patientId);
+    return task?.outcome || task?.memo || task?.summary || latestMessage?.body || patient?.notes || "";
+  }
+
+  function isOverdueTask(task) {
+    return !!task?.dueDate && !["done", "canceled"].includes(task.status) && daysBetween(todayISO(), task.dueDate) < 0;
+  }
+
+  function renderPatientDirectoryActions(patientId, summary) {
+    const task = summary.nextTask;
+    const taskButton = task
+      ? `<button class="btn small tonal" data-action="edit-care-task" data-id="${esc(task.id)}">${esc(careTaskActionLabel(task))}</button>`
+      : `<button class="btn small tonal" data-action="new-care-task" data-patient-id="${esc(patientId)}">액션</button>`;
+    return `
+      ${taskButton}
+      <button class="btn small secondary" data-action="edit-patient" data-id="${esc(patientId)}">수정</button>
+      <button class="btn small ghost" data-action="open-patient" data-id="${esc(patientId)}">열기</button>
+      <button class="btn small danger" data-action="delete-patient" data-id="${esc(patientId)}">삭제</button>
+    `;
+  }
+
+  function updateRetentionStage(patientId, value) {
+    const patient = getPatient(patientId);
+    if (!patient) return toast("환자를 찾을 수 없습니다.");
+    const stage = retentionStageOption(value);
+    const task = primaryOpenCareTask(patientId);
+
+    if (task) {
+      task.actionTemplateId = "";
+      task.actionName = stage.actionName;
+      task.title = stage.actionName;
+      task.category = stage.category;
+      task.channel = stage.channel;
+      if (!task.memo && !task.summary) {
+        task.memo = stage.memo;
+        task.summary = stage.memo;
+      }
+    } else {
+      db.careTasks.push({
+        id: uid("task"),
+        patientId,
+        actionTemplateId: "",
+        actionName: stage.actionName,
+        title: stage.actionName,
+        category: stage.category,
+        channel: stage.channel,
+        dueDate: todayISO(),
+        dueTime: "10:00",
+        offsetDays: 0,
+        status: "open",
+        priority: "normal",
+        memo: stage.memo,
+        summary: stage.memo,
+        outcome: "",
+        completedAt: "",
+        createdAt: todayISO(),
+        schemaVersion: 2
+      });
+    }
+
+    state.currentPatientId = patientId;
+    saveDb();
+    render();
+    toast(`${patient.name} 리텐션 상태를 ${stage.label}로 변경했습니다.`);
+  }
+
   function latestDateForPatient(patientId) { return latestVisit(patientId)?.date || getPatient(patientId)?.createdAt || ""; }
   function nextVisitDate(patientId) { return latestVisit(patientId)?.nextVisitDate || ""; }
 
@@ -2723,11 +3063,12 @@
 
   function patientSortValue(patient, key) {
     const metrics = patientMetrics(patient.id);
+    const summary = retentionSummaryForPatient(patient.id);
     return ({
       name: patient.name || "",
-      status: patient.status || "",
-      latestVisit: latestDateForPatient(patient.id),
-      nextVisit: nextVisitDate(patient.id),
+      status: currentRetentionStageValue(patient.id),
+      latestVisit: summary.recentDate,
+      nextVisit: summary.nextDate,
       deltaWeight: metrics.deltaWeight,
       report: needsReport(patient.id) ? 1 : 0
     })[key] ?? "";
@@ -2873,14 +3214,14 @@
   function careTasksOn(date) {
     return db.careTasks
       .filter((task) => task.dueDate === date)
-      .sort((a, b) => `${a.dueTime || ""} ${a.actionName || a.title || ""}`.localeCompare(`${b.dueTime || ""} ${b.actionName || b.title || ""}`, "ko-KR", { numeric: true }));
+      .sort((a, b) => `${a.dueTime || ""} ${careTaskDisplayName(a)}`.localeCompare(`${b.dueTime || ""} ${careTaskDisplayName(b)}`, "ko-KR", { numeric: true }));
   }
 
   function renderCalendarTask(task) {
     const patient = getPatient(task.patientId);
     const done = task.status === "done";
     return `<div class="cal-task ${done ? "done" : ""}">
-      <button class="cal-task-title" data-action="edit-care-task" data-id="${esc(task.id)}">✓ ${esc(patient?.name || "환자")} ${esc(task.actionName || task.title || careTaskCategoryLabel(task.category))}</button>
+      <button class="cal-task-title" data-action="edit-care-task" data-id="${esc(task.id)}">✓ ${esc(patient?.name || "환자")} ${esc(careTaskDisplayName(task))}</button>
       ${renderDoneCheckbox(task.id, done)}
     </div>`;
   }
@@ -2891,7 +3232,7 @@
       kind: "careTask",
       id: task.id,
       date: task.dueDate || task.createdAt || "",
-      name: task.actionName || task.title || careTaskCategoryLabel(task.category),
+      name: careTaskDisplayName(task),
       category: careTaskCategoryLabel(task.category),
       status: task.status || "open",
       memo: task.outcome || task.memo || task.summary || "",

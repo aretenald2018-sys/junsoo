@@ -562,6 +562,55 @@ tbody tr.clickable:hover {
   flex-wrap: wrap;
 }
 
+.retention-filter-bar {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--gray-200);
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--gray-50);
+}
+
+.retention-filter {
+  min-width: 128px;
+  display: grid;
+  gap: 4px;
+}
+
+.retention-filter span {
+  color: var(--gray-600);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.retention-signal-strip {
+  margin-left: auto;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.retention-date-meta {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.memo-preview {
+  max-width: 220px;
+  color: var(--gray-700);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .input,
 .select,
 .textarea {
