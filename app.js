@@ -25,6 +25,7 @@
     "imports"
   ];
   const DATE_LOCALE = "ko-KR";
+  const HANGUL_INITIALS = ["ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"];
 
   const state = {
     authenticated: Boolean(sessionStorage.getItem(AUTH_SESSION_KEY)),
@@ -1269,7 +1270,13 @@
               const appointments = db.appointments.filter((a) => a.date === date).sort(byDateTime);
               const tasks = careTasksOn(date);
               return `<div class="cal-cell ${cell.off ? "off" : ""} ${date === todayISO() ? "today" : ""}">
-                <div class="cal-num">${cell.day}</div>
+                <div class="cal-cell-head">
+                  <div class="cal-num">${cell.day}</div>
+                  ${!cell.off ? `<div class="cal-cell-actions">
+                    <button class="cal-quick" title="예약 추가" aria-label="예약 추가" data-action="new-appointment" data-date="${esc(date)}">+</button>
+                    <button class="cal-quick tonal" title="액션 추가" aria-label="액션 추가" data-action="new-care-task" data-date="${esc(date)}">✓</button>
+                  </div>` : ""}
+                </div>
                 ${!cell.off ? appointments.map((a) => {
                   const p = getPatient(a.patientId);
                   return `<button class="cal-event" data-action="edit-appointment" data-id="${a.id}">${esc(a.time)} ${esc(p?.name || "환자")} · ${esc(a.type)}</button>`;
@@ -1413,7 +1420,7 @@
         deleteRecord("messages", el.dataset.id, "문자 기록을 삭제했습니다.");
         break;
       case "new-care-task":
-        openCareTaskModal(null, el.dataset.patientId);
+        openCareTaskModal(null, el.dataset.patientId, el.dataset.date);
         break;
       case "edit-care-task":
         openCareTaskModal(el.dataset.id);
@@ -1434,7 +1441,7 @@
         deleteActionTemplate(el.dataset.id);
         break;
       case "new-appointment":
-        openAppointmentModal();
+        openAppointmentModal(null, el.dataset.date);
         break;
       case "edit-appointment":
         openAppointmentModal(el.dataset.id);
@@ -2257,11 +2264,11 @@
     toast("문자 기록을 저장했습니다.");
   }
 
-  function openCareTaskModal(id, patientId) {
+  function openCareTaskModal(id, patientId, dueDateOverride = "") {
     const task = id ? db.careTasks.find((item) => item.id === id) : null;
     const template = task?.actionTemplateId ? getActionTemplate(task.actionTemplateId) : activeActionTemplates()[0];
     const patient = getPatient(task?.patientId || patientId || state.currentPatientId) || db.patients[0];
-    const dueDate = task?.dueDate || addDays(todayISO(), template?.offsetDays || 0);
+    const dueDate = task?.dueDate || dueDateOverride || addDays(todayISO(), template?.offsetDays || 0);
     const t = task || buildCareTaskFromTemplate(patient?.id || "", template, dueDate);
     openModal(task ? "예정 액션 수정" : "예정 액션 등록", `
       <form data-form="careTask" class="stack">
@@ -2368,9 +2375,9 @@
     toast("액션 템플릿을 저장했습니다.");
   }
 
-  function openAppointmentModal(id) {
+  function openAppointmentModal(id, dateOverride = "") {
     const appt = id ? db.appointments.find((a) => a.id === id) : null;
-    const a = appt || { id: "", patientId: state.currentPatientId || db.patients[0]?.id, date: todayISO(), time: "10:00", type: "재진", status: "reserved", memo: "" };
+    const a = appt || { id: "", patientId: state.currentPatientId || db.patients[0]?.id, date: dateOverride || todayISO(), time: "10:00", type: "재진", status: "reserved", memo: "" };
     openModal(appt ? "예약 수정" : "예약 추가", `
       <form data-form="appointment" class="stack">
         <input type="hidden" name="id" value="${esc(a.id)}" />
@@ -2897,10 +2904,66 @@
     if (state.retentionCategoryFilter !== "all" && task?.category !== state.retentionCategoryFilter) return false;
     if (state.retentionChannelFilter !== "all" && task?.channel !== state.retentionChannelFilter) return false;
 
-    const search = state.patientSearch.trim().toLowerCase();
-    if (!search) return true;
-    const text = `${p.name} ${p.phone} ${p.chartNo} ${p.notes} ${retentionMemoPreview(p.id, summary)}`.toLowerCase();
-    return text.includes(search);
+    return patientMatchesSearch(p, summary, state.patientSearch);
+  }
+
+  function patientMatchesSearch(patient, summary, query) {
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return true;
+    const needles = uniqueSearchParts([
+      normalizedQuery,
+      compactSearchText(normalizedQuery),
+      hangulInitials(normalizedQuery)
+    ]);
+    const haystacks = patientSearchHaystacks(patient, summary);
+    return needles.some((needle) => haystacks.some((text) => text.includes(needle)));
+  }
+
+  function patientSearchHaystacks(patient, summary) {
+    const aliases = patientAliasesFor(patient.id);
+    const baseText = [
+      patient.name,
+      patient.phone,
+      cleanPhone(patient.phone),
+      patient.chartNo,
+      patient.notes,
+      patient.source,
+      patient.primaryDoctor,
+      patient.allergies,
+      patient.medications,
+      patient.conditions,
+      retentionMemoPreview(patient.id, summary),
+      ...aliases.flatMap((alias) => [alias.displayName, alias.rawLabel, alias.normalizedKey, alias.id])
+    ].filter(Boolean).join(" ");
+    return uniqueSearchParts([
+      normalizeSearchText(baseText),
+      compactSearchText(baseText),
+      hangulInitials(baseText)
+    ]);
+  }
+
+  function patientAliasesFor(patientId) {
+    return db.patientAliases.filter((alias) => alias.patientId === patientId || alias.id === patientId);
+  }
+
+  function uniqueSearchParts(parts) {
+    return [...new Set(parts.map((part) => String(part || "").trim()).filter(Boolean))];
+  }
+
+  function normalizeSearchText(value) {
+    return String(value || "").normalize("NFKC").toLowerCase().trim();
+  }
+
+  function compactSearchText(value) {
+    return normalizeSearchText(value).replace(/[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ]/g, "");
+  }
+
+  function hangulInitials(value) {
+    return Array.from(normalizeSearchText(value)).map((ch) => {
+      const code = ch.charCodeAt(0);
+      if (code >= 0xac00 && code <= 0xd7a3) return HANGUL_INITIALS[Math.floor((code - 0xac00) / 588)];
+      return /[ㄱ-ㅎ]/.test(ch) ? ch : "";
+    }).join("");
   }
 
   function retentionTaskStatusMatches(patientId, summary, status) {
@@ -3300,7 +3363,14 @@
       if (data[key] !== undefined) data[key] = Array.isArray(data[key]) ? [...data[key], value] : [data[key], value];
       else data[key] = value;
     });
-    form.querySelectorAll('input[type="checkbox"]').forEach((input) => data[input.name] = input.checked);
+    const checkboxGroups = {};
+    form.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      if (!checkboxGroups[input.name]) checkboxGroups[input.name] = [];
+      checkboxGroups[input.name].push(input);
+    });
+    Object.entries(checkboxGroups).forEach(([name, inputs]) => {
+      data[name] = inputs.length === 1 ? inputs[0].checked : inputs.filter((input) => input.checked).map((input) => input.value);
+    });
     return data;
   }
 
