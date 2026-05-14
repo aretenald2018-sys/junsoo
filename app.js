@@ -15,7 +15,8 @@
     "appointments",
     "messages",
     "careTasks",
-    "actionTemplates"
+    "actionTemplates",
+    "developmentRequests"
   ];
   const REMOTE_COLLECTIONS = [
     ...REMOTE_MUTABLE_COLLECTIONS,
@@ -59,7 +60,8 @@
     reports: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>',
     retention: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
     calendar: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>',
-    stats: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-2"/></svg>'
+    stats: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-2"/></svg>',
+    developmentRequests: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
   };
 
   let db = null;
@@ -105,6 +107,7 @@
       messages: Array.isArray(value.messages) ? value.messages : seeded.messages,
       careTasks: Array.isArray(value.careTasks) ? value.careTasks : [],
       actionTemplates: Array.isArray(value.actionTemplates) && value.actionTemplates.length ? value.actionTemplates : defaultActionTemplates(),
+      developmentRequests: Array.isArray(value.developmentRequests) ? value.developmentRequests : [],
       sourceRecords: Array.isArray(value.sourceRecords) ? value.sourceRecords : [],
       patientAliases: Array.isArray(value.patientAliases) ? value.patientAliases : [],
       dataQualityIssues: Array.isArray(value.dataQualityIssues) ? value.dataQualityIssues : [],
@@ -126,6 +129,7 @@
       messages: [],
       careTasks: [],
       actionTemplates: defaultActionTemplates(),
+      developmentRequests: [],
       sourceRecords: [],
       patientAliases: [],
       dataQualityIssues: [],
@@ -398,7 +402,8 @@
       appointments,
       messages: [
         { id: "msg_1", patientId: "p_lee", date: "2026-05-12", channel: "LMS", template: "리포트 + 재진 안내", body: "경과 리포트가 준비되었습니다. 재진 예약을 권해드립니다.", status: "queued" }
-      ]
+      ],
+      developmentRequests: []
     };
   }
 
@@ -514,6 +519,7 @@
       ["retention", "리텐션 관리", counts.retention],
       ["reports", "리포트 발행", counts.reports],
       ["calendar", "예약 캘린더", counts.calendar],
+      ["developmentRequests", "개발 요청 사항", counts.developmentRequests],
       ["stats", "통계", ""]
     ];
     return `
@@ -554,6 +560,7 @@
       reports: ["리포트 발행", "체성분과 진료 기록 기반 환자용 리포트"],
       retention: ["리텐션 관리", "환자 목록, 예정 액션, 장기 미방문 관리"],
       calendar: ["예약 캘린더", "예약 CRUD와 노쇼/완료 관리"],
+      developmentRequests: ["개발 요청 사항", "개선 요청과 화면 캡처를 접수합니다"],
       stats: ["통계", "로컬 데이터 기반 운영 지표"]
     }[state.view] || ["Renewd", ""];
     return `
@@ -580,6 +587,7 @@
       case "reports": return renderReports();
       case "retention": return renderRetention();
       case "calendar": return renderCalendar();
+      case "developmentRequests": return renderDevelopmentRequests();
       case "stats": return renderStats();
       default: return renderDashboard();
     }
@@ -1290,6 +1298,77 @@
     `;
   }
 
+  function renderDevelopmentRequests() {
+    const requests = db.developmentRequests
+      .slice()
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    const openCount = requests.filter((request) => !["request_done", "request_on_hold"].includes(request.status)).length;
+    return `
+      <div class="page-head">
+        <div>
+          <div class="page-title">개발 요청 사항</div>
+          <div class="page-sub">운영 중 필요한 개선 요청을 모읍니다.</div>
+        </div>
+        <div class="spacer"></div>
+        ${badge(`미완료 ${openCount}`, openCount ? "amber" : "green")}
+        ${badge(`전체 ${requests.length}`, "blue")}
+      </div>
+      <div class="grid cols-2 request-layout">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">요청 등록</div>
+              <div class="card-sub">텍스트는 필수, 이미지는 선택입니다.</div>
+            </div>
+          </div>
+          <div class="card-body">
+            <form data-form="developmentRequest" class="stack">
+              <div class="form-grid">
+                ${field("제목", "title", "", "text", false, "예: 환자 검색 개선")}
+                ${field("작성자", "requester", "", "text", false, "예: 준수")}
+                ${textareaField("요청 내용", "body", "", "요청 내용을 입력하세요", "wide")}
+                <div class="field wide">
+                  <label>이미지 첨부</label>
+                  <input class="input" name="requestImage" type="file" accept="image/*" />
+                </div>
+              </div>
+              <div class="form-actions">
+                <button class="btn primary" type="submit">요청 등록</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="request-list">
+          ${requests.map(renderDevelopmentRequestCard).join("") || empty("등록된 개발 요청이 없습니다.")}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDevelopmentRequestCard(request) {
+    return `
+      <article class="request-card">
+        <div class="request-card-main">
+          <div class="request-card-head">
+            <div>
+              <div class="request-title">${esc(request.title || "제목 없음")}</div>
+              <div class="muted" style="font-size:12px">${formatDate(request.createdAt)}${request.requester ? ` · ${esc(request.requester)}` : ""}</div>
+            </div>
+            ${statusBadge(request.status)}
+          </div>
+          <div class="request-body">${esc(request.body || "")}</div>
+          ${request.imageDataUrl ? `<img class="request-image" src="${request.imageDataUrl}" alt="${esc(request.imageName || "첨부 이미지")}" />` : ""}
+        </div>
+        <div class="request-card-actions">
+          <select class="select" data-action="development-request-status" data-id="${esc(request.id)}" aria-label="개발 요청 상태">
+            ${developmentRequestStatusOptions().map(([value, label]) => option(value, label, request.status)).join("")}
+          </select>
+          <button class="btn small ghost" data-action="delete-development-request" data-id="${esc(request.id)}">삭제</button>
+        </div>
+      </article>
+    `;
+  }
+
   function renderStats() {
     const visits = db.visits.length;
     const revenue = db.payments.filter((p) => p.status === "paid").reduce((sum, p) => sum + Number(p.amount || 0), 0);
@@ -1319,7 +1398,7 @@
     const el = event.target.closest("[data-action]");
     if (!el) return;
     const action = el.dataset.action;
-    if (!["patient-search", "patient-filter", "report-patient", "retention-stage-select", "retention-owner-filter", "retention-stage-filter", "retention-task-status-filter", "retention-category-filter", "retention-channel-filter", "retention-due-filter"].includes(action)) event.preventDefault();
+    if (!["patient-search", "patient-filter", "report-patient", "retention-stage-select", "retention-owner-filter", "retention-stage-filter", "retention-task-status-filter", "retention-category-filter", "retention-channel-filter", "retention-due-filter", "development-request-status"].includes(action)) event.preventDefault();
     event.stopPropagation();
 
     switch (action) {
@@ -1449,6 +1528,9 @@
       case "delete-appointment":
         deleteRecord("appointments", el.dataset.id, "예약을 삭제했습니다.");
         break;
+      case "delete-development-request":
+        deleteRecord("developmentRequests", el.dataset.id, "개발 요청을 삭제했습니다.");
+        break;
       case "export-json":
         exportJson();
         break;
@@ -1531,6 +1613,10 @@
       applyTemplateToCareTaskForm(el.form, el.value);
       return;
     }
+    if (el.dataset.action === "development-request-status") {
+      updateDevelopmentRequestStatus(el.dataset.id, el.value);
+      return;
+    }
     if (el.id === "json-import-file") {
       importJsonFile(el.files?.[0]);
       return;
@@ -1562,6 +1648,7 @@
     if (type === "appointment") saveAppointmentForm(form);
     if (type === "careTask") saveCareTaskForm(form);
     if (type === "actionTemplate") saveActionTemplateForm(form);
+    if (type === "developmentRequest") await saveDevelopmentRequestForm(form);
     if (type === "photo") await savePhotoForm(form);
   }
 
@@ -2191,6 +2278,49 @@
     toast("사진을 저장했습니다.");
   }
 
+  async function saveDevelopmentRequestForm(form) {
+    const v = formValues(form);
+    const bodyText = String(v.body || "").trim();
+    if (!bodyText) return toast("요청 내용을 입력해 주세요.");
+    const file = form.querySelector('input[name="requestImage"]')?.files?.[0];
+    let image = null;
+    if (file) {
+      try {
+        image = await readCompressedImageData(file);
+      } catch (error) {
+        console.error(error);
+        return toast("이미지 파일을 처리하지 못했습니다.");
+      }
+    }
+    db.developmentRequests.push({
+      id: uid("devreq"),
+      title: String(v.title || "").trim(),
+      requester: String(v.requester || "").trim(),
+      body: bodyText,
+      status: "request_received",
+      imageDataUrl: image?.dataUrl || "",
+      imageName: image?.name || "",
+      imageType: image?.type || "",
+      imageSize: image?.size || 0,
+      createdAt: todayISO(),
+      updatedAt: todayISO()
+    });
+    form.reset();
+    saveDb();
+    render();
+    toast("개발 요청을 등록했습니다.");
+  }
+
+  function updateDevelopmentRequestStatus(id, status) {
+    const request = db.developmentRequests.find((item) => item.id === id);
+    if (!request) return toast("개발 요청을 찾을 수 없습니다.");
+    request.status = status;
+    request.updatedAt = todayISO();
+    saveDb();
+    render();
+    toast("개발 요청 상태를 변경했습니다.");
+  }
+
   function openPaymentModal(id, patientId) {
     const payment = id ? db.payments.find((p) => p.id === id) : null;
     const p = payment || { id: "", patientId: patientId || state.currentPatientId, date: todayISO(), item: "", amount: "", method: "카드", status: "paid" };
@@ -2500,7 +2630,8 @@
       dashboard: buildCareQueue().length,
       reports: Math.max(db.patients.filter((p) => needsReport(p.id)).length, db.careTasks.filter((task) => task.category === "progress_check" || task.phase !== "unknown").length),
       retention: buildCareQueue().filter((q) => q.type !== "리포트").length,
-      calendar: db.appointments.filter((a) => a.date === todayISO()).length + careTasksOn(todayISO()).length
+      calendar: db.appointments.filter((a) => a.date === todayISO()).length + careTasksOn(todayISO()).length,
+      developmentRequests: db.developmentRequests.filter((request) => !["request_done", "request_on_hold"].includes(request.status)).length
     };
   }
 
@@ -3426,6 +3557,16 @@
     </div>`;
   }
 
+  function developmentRequestStatusOptions() {
+    return [
+      ["request_received", "접수"],
+      ["request_reviewing", "검토중"],
+      ["request_in_progress", "진행중"],
+      ["request_done", "완료"],
+      ["request_on_hold", "보류"]
+    ];
+  }
+
   function statusBadge(value) {
     const map = {
       new: ["신규", "blue"],
@@ -3443,7 +3584,12 @@
       reserved: ["예약", "blue"],
       done: ["완료", "green"],
       no_show: ["노쇼", "red"],
-      tentative: ["미확정", "amber"]
+      tentative: ["미확정", "amber"],
+      request_received: ["접수", "blue"],
+      request_reviewing: ["검토중", "amber"],
+      request_in_progress: ["진행중", "green"],
+      request_done: ["완료", "green"],
+      request_on_hold: ["보류", ""]
     };
     const item = map[value] || [value || "-", ""];
     return badge(item[0], item[1]);
@@ -3578,6 +3724,37 @@
       reader.onload = () => resolve(String(reader.result || ""));
       reader.onerror = reject;
       reader.readAsDataURL(file);
+    });
+  }
+
+  async function readCompressedImageData(file) {
+    if (!file || !String(file.type || "").startsWith("image/")) throw new Error("Invalid image file");
+    const source = await readFileAsDataUrl(file);
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => {
+        const maxSide = 1280;
+        const scale = Math.min(1, maxSide / Math.max(image.width || maxSide, image.height || maxSide));
+        const width = Math.max(1, Math.round((image.width || maxSide) * scale));
+        const height = Math.max(1, Math.round((image.height || maxSide) * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) return reject(new Error("Canvas is unavailable"));
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        resolve({
+          dataUrl,
+          name: file.name || "request-image.jpg",
+          type: "image/jpeg",
+          size: Math.round(dataUrl.length * 0.75)
+        });
+      };
+      image.onerror = reject;
+      image.src = source;
     });
   }
 })();

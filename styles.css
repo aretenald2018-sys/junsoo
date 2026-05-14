@@ -663,6 +663,11 @@ tbody tr.clickable:hover {
   grid-column: 1 / -1;
 }
 
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .tabs {
   display: flex;
   gap: 4px;
@@ -842,6 +847,69 @@ tbody tr.clickable:hover {
 
 .photo-card .photo-meta {
   padding: 10px;
+}
+
+.request-layout {
+  grid-template-columns: minmax(300px, 0.85fr) minmax(420px, 1.2fr);
+  align-items: start;
+}
+
+.request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.request-card {
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgba(20, 28, 40, 0.03);
+  overflow: hidden;
+}
+
+.request-card-main {
+  padding: 14px;
+}
+
+.request-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.request-title {
+  font-weight: 800;
+  line-height: 22px;
+}
+
+.request-body {
+  margin-top: 10px;
+  color: var(--gray-800);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.request-image {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  margin-top: 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: var(--gray-50);
+  object-fit: contain;
+}
+
+.request-card-actions {
+  padding: 10px 14px;
+  border-top: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .calendar-grid {
